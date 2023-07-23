@@ -6,7 +6,7 @@ import re
 import sys
 import time
 from contextlib import contextmanager
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 import sympy
 
@@ -172,8 +172,8 @@ class GraphLowering(torch.fx.Interpreter):
         self._shape_env = shape_env
         self.sizevars = SizeVarAllocator(shape_env)
         self.graph_inputs: Dict[str, TensorBox] = {}
-        self.graph_inputs_original: Dict[str, InputBuffer] = {}
-        self.graph_outputs: Optional[List[ir.IRNode]] = None
+        self.graph_inputs_original: Dict[str, Union[InputBuffer, ir.StorageBox]] = {}
+        self.graph_outputs: Optional[List[Union[ir.StorageBox, ir.InputBuffer]]] = None
         self.device_types: Set[str] = set()
         self.device_idxs: Set[int] = set()
         self.cuda = False
@@ -508,15 +508,8 @@ class GraphLowering(torch.fx.Interpreter):
             self.graph_inputs[target] = expr
             return expr
         assert isinstance(example, torch.Tensor), example
-        # todo(chilli): We can remove the last check once we turn buffers into
-        # static shape tensors. That's a hack to workaround Inductor believing
-        # the buffer should be static but us passing in a fake tensor with
-        # symbolic shapes.
-        if not example._has_symbolic_sizes_strides:
-            # the first N inputs are weights
-            sizes, strides = self.static_sizes_strides(example)
-        else:
-            sizes, strides = self.symbolic_sizes_strides(example)
+        # the first N inputs are weights
+        sizes, strides = self.static_sizes_strides(example)
         # TODO(jansel): handle input aliasing
         tensor = TensorBox.create(
             InputBuffer(
