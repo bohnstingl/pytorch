@@ -426,6 +426,8 @@ class GraphLowering(torch.fx.Interpreter):
         log.debug("Set cpp_wrapper to False due to %s", cond)
 
     def register_buffer(self, buffer: ir.ComputedBuffer):
+        #import pdb
+        #pdb.set_trace()
         name = f"buf{len(self.buffers)}"
         self.buffers.append(buffer)
         self.name_to_buffer[name] = buffer
@@ -538,6 +540,8 @@ class GraphLowering(torch.fx.Interpreter):
             # passthrough lowerings from .pattern_matcher
             return target(*args, **kwargs)
 
+        #import pdb
+        #pdb.set_trace()
         if target not in lowerings:
             base_name = target.name().split(".")[0]
             if base_name in FALLBACK_ALLOW_LIST:
@@ -562,6 +566,8 @@ class GraphLowering(torch.fx.Interpreter):
                 raise MissingOperatorWithoutDecomp(target, args, kwargs)
 
         try:
+            #import pdb
+            #pdb.set_trace()
             out = lowerings[target](*args, **kwargs)
             return out
         except Exception as e:
@@ -708,6 +714,8 @@ class GraphLowering(torch.fx.Interpreter):
                         and not is_input_for_as_strided
                     ):
                         stride_order = ir.NHWC_STRIDE_ORDER
+                    #import pdb
+                    #pdb.set_trace()
                     result = ir.ExternKernel.require_stride_order(result, stride_order)
 
             # Realize if (1) any user need inputs realized, or (2) there is
@@ -771,6 +779,8 @@ class GraphLowering(torch.fx.Interpreter):
         # Note: we can't YOLO tree_map over this result, because if there are
         # buffers or a view involved, we might not be able to validly assign
         # the origin_node here.
+        #import pdb
+        #pdb.set_trace()
         if isinstance(result, TensorBox) and isinstance(result.data, ir.StorageBox):
             if isinstance(result.data.data, ir.Loops):
                 result.data.data.origin_node = n
@@ -850,6 +860,8 @@ class GraphLowering(torch.fx.Interpreter):
         assert self.scheduler is not None  # mypy can't figure this out
         self.scheduler.codegen()
         assert self.wrapper_code is not None
+        import pdb
+        pdb.set_trace()
         return self.wrapper_code.generate()
 
     def count_bytes(self):
@@ -895,9 +907,13 @@ class GraphLowering(torch.fx.Interpreter):
 
     @dynamo_timed
     def compile_to_module(self):
+        #import pdb
+        #pdb.set_trace()
         from .codecache import PyCodeCache
 
         code, linemap = self.codegen()
+        #import pdb
+        #pdb.set_trace()
         linemap = [(line_no, node.stack_trace) for line_no, node in linemap]
         key, path = PyCodeCache.write(code)
         mod = PyCodeCache.load_by_key_path(key, path, linemap=linemap)
@@ -920,6 +936,8 @@ class GraphLowering(torch.fx.Interpreter):
         return mod
 
     def compile_to_fn(self):
+        #import pdb
+        #pdb.set_trace()
         if self.aot_mode:
             from .codecache import AotCodeCache
 

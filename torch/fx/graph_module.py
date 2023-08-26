@@ -679,6 +679,9 @@ class {module_name}(torch.nn.Module):
 
         cls.__call__ = call_wrapped
 
+        #import pdb
+        #pdb.set_trace()
+
         return python_code
 
     # Passing Tracer as argument allows subclasses extending fx.GraphModule

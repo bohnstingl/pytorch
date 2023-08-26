@@ -87,6 +87,11 @@ allow_ignore_mark_dynamic = False
 # Set this to False to assume nn.Modules() contents are immutable (similar assumption as freezing)
 guard_nn_modules = False
 
+# This flag is used to indicate whether for loops in code segment that gets compiled should be unrolled
+# If set to True, then the for loop is unrolled and the resulting code is specialized to the loop bounds
+# If set to False, then the for loop is maintained in the code and the resulting code is not specialized
+unroll_for_iter = False
+
 # This feature doesn't really work.  We offer this flag for experimental
 # purposes / if you want to help us build out support.
 #

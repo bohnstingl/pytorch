@@ -868,6 +868,8 @@ def compile_fx(
     config_patches: Optional[Dict[str, Any]] = None,
     decompositions: Optional[Dict[OpOverload, Callable]] = None,
 ):
+    #import pdb
+    #pdb.set_trace()
     """Main entrypoint to a compile given FX graph"""
     if config_patches:
         with config.patch(config_patches):

@@ -74,6 +74,8 @@ class PyCodegen:
             self.clear_tos()
             return
 
+        #import pdb
+        #pdb.set_trace()
         self.tx.output.guards.update(value.guards)
 
         assert isinstance(value, VariableTracker)

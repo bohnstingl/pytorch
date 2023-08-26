@@ -457,6 +457,8 @@ class BuiltinVariable(VariableTracker):
     ) -> "VariableTracker":
         from .builder import wrap_fx_proxy, wrap_fx_proxy_cls
 
+        #import pdb
+        #pdb.set_trace()
         constant_args = check_constant_args(args, kwargs)
         tensor_args = self.tensor_args(*args, **kwargs)
         unspec_python_args = self.unspec_python_args(*args, **kwargs)
@@ -501,11 +503,32 @@ class BuiltinVariable(VariableTracker):
                         args[1],
                     ]
 
+                sym_args = None
+                if isinstance(args[1], TupleVariable) and type(args[1][0].value) == str:
+                    import pdb
+                    pdb.set_trace()
+                    #sym_val = args[1]
+                    sym_args = args
+                    options = VariableTracker.propagate(sym_args[1].items)
+                    #sym_args = TupleVariable(old_args[1].items, **options)
+                    new_item0 = tx.symbolic_locals[sym_args[1][0].value]
+                    new_tuple = TupleVariable([new_item0] + sym_args[1].items[1:], **options)
+                    args = [sym_args[0], new_tuple]
+                    import pdb
+                    pdb.set_trace()
+
+                #print([n for n in tx.output.graph.nodes])
                 proxy = tx.output.create_proxy(
                     "call_function",
                     fn,
                     *proxy_args_kwargs(args, kwargs),
                 )
+                if sym_args is not None:
+                    import pdb
+                    pdb.set_trace()
+                    n = [n for n in tx.output.graph.nodes][-1]
+                    n.sym_args = sym_args
+                #print([n for n in tx.output.graph.nodes])
                 if any(isinstance(arg, FakeItemVariable) for arg in args):
                     return wrap_fx_proxy_cls(
                         FakeItemVariable,
@@ -595,6 +618,8 @@ class BuiltinVariable(VariableTracker):
 
         if handler:
             try:
+                #import pdb
+                #pdb.set_trace()
                 result = handler(tx, *args, **kwargs)
                 if result is not None:
                     return result.add_options(options)
@@ -728,11 +753,18 @@ class BuiltinVariable(VariableTracker):
     call_max = _call_min_max
 
     def call_range(self, tx, *args):
+        #TODO: boh Here the guard is placed that the shape is specialized
+        #import pdb
+        #pdb.set_trace()
+        #config.unroll_for_iter and 
         if self.unspec_python_args(*args) or self.constant_args(*args):
             args, _ = specialize_args_kwargs(tx, args, {})
             return variables.RangeVariable(args)
         elif self._dynamic_args(*args):
             args = [variables.ConstantVariable(guard_if_dyn(arg)) for arg in args]
+            return variables.RangeVariable(args)
+        else:
+            args = [variables.ConstantVariable(arg) for arg in args]
             return variables.RangeVariable(args)
         # None no-ops this handler and lets the driving function proceed
         return None
@@ -758,6 +790,8 @@ class BuiltinVariable(VariableTracker):
         )
 
     def _call_iter_tuple_list(self, tx, obj=None, *args, **kwargs):
+        #import pdb
+        #pdb.set_trace()
         if self._dynamic_args(*args, **kwargs):
             return self._dyn_proxy(tx, *args, **kwargs)
         cls = variables.BaseListVariable.cls_for(self.fn)
@@ -788,6 +822,10 @@ class BuiltinVariable(VariableTracker):
                     guards=guards,
                 ).add_options(self, obj)
 
+            #import pdb
+            #pdb.set_trace()
+            #out = cls(list(obj.unpack_var_sequence(tx)),mutable_local=MutableLocal(),guards=guards,).add_options(self, obj)
+            #return out
             return cls(
                 list(obj.unpack_var_sequence(tx)),
                 mutable_local=MutableLocal(),
@@ -913,6 +951,8 @@ class BuiltinVariable(VariableTracker):
         return args[0].call_method(tx, "__len__", args[1:], kwargs)
 
     def call_getitem(self, tx, *args, **kwargs):
+        #import pdb
+        #pdb.set_trace()
         if self.unspec_python_args(*args, **kwargs):
             args, kwargs = specialize_args_kwargs(tx, args, kwargs)
         return args[0].call_method(tx, "__getitem__", args[1:], kwargs)

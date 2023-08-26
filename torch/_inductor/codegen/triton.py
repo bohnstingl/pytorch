@@ -1582,6 +1582,9 @@ class TritonKernel(Kernel):
         ):
             return
 
+        #import pdb
+        #pdb.set_trace()
+
         if self.inside_reduction and not self.persistent_reduction:
             self.body.writeline("for roffset in range(0, rnumel, RBLOCK):")
             with self.body.indent():
@@ -1741,6 +1744,8 @@ class TritonKernel(Kernel):
                     """
                 )
 
+        #import pdb
+        #pdb.set_trace()
         argdefs, _, signature = self.args.python_argdefs()
         # maps actual expression to SizeArg if its in sizevars replacements
         for i, arg in enumerate(signature):
@@ -1773,6 +1778,8 @@ class TritonKernel(Kernel):
             "autotune_hints": set(self.autotune_hints),
         }
 
+        #import pdb
+        #pdb.set_trace()
         for tree in self.range_trees:
             if tree.prefix != "r" or self.inside_reduction:
                 sizearg = SizeArg(f"{tree.prefix}numel", tree.numel)
@@ -1820,7 +1827,11 @@ class TritonKernel(Kernel):
             """
         code.splice(heuristics_line)
         code.writeline(f"def {name or 'KERNEL_NAME'}({', '.join(argdefs)}):")
+        #import pdb
+        #pdb.set_trace()
         self.codegen_body()
+        #import pdb
+        #pdb.set_trace()
         with code.indent():
             self.codegen_static_numels(code)
             for old, new in self.args.aliases():
@@ -1830,6 +1841,8 @@ class TritonKernel(Kernel):
         if config.benchmark_kernel:
             code.splice(self.codegen_kernel_benchmark())
 
+        #import pdb
+        #pdb.set_trace()
         if name is not None:
             return code.getvalue()
 
@@ -2260,6 +2273,8 @@ class TritonScheduling:
         tiled_groups, reduction_hint_val, mutations, index_dtype = self.get_kernel_args(
             node_schedule, numel, reduction_numel
         )
+        #import pdb
+        #pdb.set_trace()
 
         kernel = TritonKernel(
             *tiled_groups,
@@ -2271,9 +2286,18 @@ class TritonScheduling:
         self.codegen_node_schedule_with_kernel(node_schedule, kernel)
 
         src_code = kernel.codegen_kernel()
+        if src_code == "\nimport triton\nimport triton.language as tl\nfrom torch._inductor.ir import ReductionHint\nfrom torch._inductor.ir import TileHint\nfrom torch._inductor.triton_heuristics import AutotuneHint, pointwise\nfrom torch._inductor.utils import instance_descriptor\nfrom torch._inductor import triton_helpers\n\n@pointwise(size_hints=[16384], filename=__file__, meta={'signature': {0: '*fp32', 1: '*fp32', 2: 'i32', 3: 'i32', 4: 'i32'}, 'device': 0, 'constants': {}, 'mutated_arg_names': [], 'autotune_hints': set(), 'configs': [instance_descriptor(divisible_by_16=(0, 1), equal_to_1=())]})\n@triton.jit\ndef KERNEL_NAME(in_ptr0, out_ptr0, ks0, ks1, xnumel, XBLOCK : tl.constexpr):\n    xoffset = tl.program_id(0) * XBLOCK\n    xindex = xoffset + tl.arange(0, XBLOCK)[:]\n    xmask = xindex < xnumel\n    x0 = xindex\n    tmp0 = tl.load(in_ptr0 + (x0 + (3*ks0*ks1)), xmask)\n    tmp1 = tl.load(in_ptr0 + (x0 + (2*ks0*ks1)), xmask)\n    tmp2 = tl.load(in_ptr0 + (x0 + (ks0*ks1)), xmask)\n    tmp3 = tl.load(in_ptr0 + (x0), xmask)\n    tmp4 = tmp3 + tmp3\n    tmp5 = tmp2 + tmp4\n    tmp6 = tmp1 + tmp5\n    tmp7 = tmp0 + tmp6\n    tl.store(out_ptr0 + (x0), tmp7, xmask)\n":
+            import pdb
+            pdb.set_trace()
+            src_code = "\nimport triton\nimport triton.language as tl\nfrom torch._inductor.ir import ReductionHint\nfrom torch._inductor.ir import TileHint\nfrom torch._inductor.triton_heuristics import AutotuneHint, pointwise\nfrom torch._inductor.utils import instance_descriptor\nfrom torch._inductor import triton_helpers\n\n@pointwise(size_hints=[16384], filename=__file__, meta={'signature': {0: '*fp32', 1: '*fp32', 2: 'i32', 3: 'i32', 4: 'i32'}, 'device': 0, 'constants': {}, 'mutated_arg_names': [], 'autotune_hints': set(), 'configs': [instance_descriptor(divisible_by_16=(0, 1), equal_to_1=())]})\n@triton.jit\ndef KERNEL_NAME(in_ptr0, out_ptr0, ks0, ks1, xnumel, XBLOCK : tl.constexpr):\n    xoffset = tl.program_id(0) * XBLOCK\n    xindex = xoffset + tl.arange(0, XBLOCK)[:]\n    xmask = xindex < xnumel\n    x0 = xindex\n    tmp0 = tl.load(in_ptr0 + (x0 + (0 * ks0 * ks1)), xmask)\n    for i in range(0, 4):\n        tmp0 = tmp0 + tl.load(in_ptr0 + (x0 + (i*ks0*ks1)), xmask)\n    tl.store(out_ptr0 + (x0), tmp0, xmask)\n"
+
         kernel_name = self.define_kernel(src_code, node_schedule)
         self.codegen_comment(node_schedule)
+        import pdb
+        pdb.set_trace()
         kernel.call_kernel(kernel_name)
+        import pdb
+        pdb.set_trace()
 
         if config.warn_mix_layout:
             kernel.warn_mix_layout(kernel_name)

@@ -15,6 +15,8 @@ import traceback
 import types
 import typing
 import weakref
+import string
+import random
 from collections.abc import Sized
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple, Type
 from unittest.mock import patch
@@ -165,6 +167,9 @@ def stack_op(fn: typing.Callable[..., object]):
 
     @functools.wraps(fn)
     def impl(self: "InstructionTranslatorBase", inst: Instruction):
+        if inst.opcode == 25:
+            import pdb
+            pdb.set_trace()
         self.push(fn_var.call_function(self, self.popn(nargs), {}))
 
     return impl
@@ -536,6 +541,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         args: List[VariableTracker],
         kwargs: Dict[str, VariableTracker],
     ):
+        #import pdb
+        #pdb.set_trace()
         assert isinstance(fn, VariableTracker)
         assert isinstance(args, list)
         assert isinstance(kwargs, dict)
@@ -555,6 +562,9 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             and inner_fn._dynamo_forbidden
         ):
             raise AssertionError(f"Attempt to trace forbidden callable {inner_fn}")
+
+        import pdb
+        pdb.set_trace()
         self.push(fn.call_function(self, args, kwargs))
 
     def update_locals_and_stack(self, oldvar: VariableTracker, newvar: VariableTracker):
@@ -617,6 +627,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
 
     def step(self):
         """Process exactly one instruction, return False we should exit"""
+        #import pdb
+        #pdb.set_trace()
         assert isinstance(self.instruction_pointer, int)
         inst = self.instructions[self.instruction_pointer]
         self.current_instruction = inst
@@ -634,6 +646,9 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             self.checkpoint = inst, self.copy_graphstate()
 
         log.debug("TRACE %s %s %s", inst.opname, inst.argval, self.stack)
+        print("TRACE %s %s %s", inst.opname, inst.argval, self.stack)
+        #import pdb
+        #pdb.set_trace()
 
         # 3.11 no longer uses a block stack, but we still keep track of one
         # so that we know which contexts are currently active.
@@ -681,6 +696,13 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             TracingContext.set_current_loc(
                 self.f_code.co_filename, self.lineno, self.f_code.co_name
             )
+
+            if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack) > 0:
+                #import pdb
+                #pdb.set_trace()
+                for_name = self.output.graph.for_loop_instr_stack[-1][0]
+                self.output.graph.for_loop_instr[for_name]['ins_nodes'].append([inst])
+
             getattr(self, inst.opname)(inst)
 
             return inst.opname != "RETURN_VALUE"
@@ -702,6 +724,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         assert self.checkpoint is not None
         continue_inst, state = self.checkpoint
         self.restore_graphstate(state)
+        import pdb
+        pdb.set_trace()
         self.output.compile_subgraph(
             self,
             partial_convert=True,
@@ -718,11 +742,19 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         with self.run_ctx_mgr():
             try:
                 self.output.push_tx(self)
+                #Here this loop does the unrolling of the for-loop. There is a FOR-ITER instr, then the block and then is a JUMP_BACKWARD op.
+                #This combination unrolls the for-loop and does not result in the for-loop in the triton code
+                #import pdb
+                #pdb.set_trace()
+                print(self.instructions)
                 while (
                     self.instruction_pointer is not None
                     and not self.output.should_exit
                     and self.step()
                 ):
+                    #import pdb
+                    #pdb.set_trace()
+                    print([n for n in self.output.graph.nodes])
                     pass
             except BackendCompilerFailed:
                 raise
@@ -759,6 +791,9 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
 
     def LOAD_FAST(self, inst):
         name = inst.argval
+        #print(name)
+        #import pdb
+        #pdb.set_trace()
 
         if name in self.f_locals and config.replay_record_enabled:
             self.exec_recorder.add_local_var(name, self.f_locals[name])
@@ -769,7 +804,18 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         assert name not in self.cell_and_freevars()
         if name not in self.symbolic_locals:
             unimplemented("undefined LOAD_FAST")
-        self.push(self.symbolic_locals[name])
+
+        if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack) > 0 and name == self.output.graph.for_loop_instr[self.output.graph.for_loop_instr_stack[-1][0]]['var_name']:
+            import pdb
+            pdb.set_trace()
+            #print('Detected that variable should be replaced with loop variable')
+            self.push(ConstantVariable(value=name))
+            #var = self.symbolic_locals[name]
+            #var.sym_name = name
+            #self.push(name)
+            #self.push(self.symbolic_locals[name])
+        else:
+            self.push(self.symbolic_locals[name])
         if name.startswith("___stack"):
             self.symbolic_locals.pop(name)
 
@@ -784,7 +830,28 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         self.push(self.symbolic_locals[inst.argval])
 
     def STORE_FAST(self, inst):
+        #if inst.argval not in self.symbolic_locals:
         self.symbolic_locals[inst.argval] = self.pop()
+
+        if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack) > 0:
+            import pdb
+            pdb.set_trace()
+            for_name = self.output.graph.for_loop_instr_stack[-1][0]
+            if self.output.graph.for_loop_instr[for_name]['var_name'] is None:
+                self.output.graph.for_loop_instr[for_name]['var_name'] = inst.argval
+
+                '''#Put a node into the graph that represents the loop variable
+                n = self.output.graph.create_node(op="placeholder", target='None',
+                                                  args=(None,),
+                                                  kwargs=None,
+                                                  name=inst.argval,
+                                                  type_expr=None)
+                self.symbolic_locals[inst.argval].sym_name = n
+                '''
+
+                #Increase the usage counter of the symbolic variable behind the loop-boundary
+                n = [n for n in self.output.graph.nodes][-1]
+                n.update_arg(0, inst.argval)
 
     def DELETE_FAST(self, inst):
         del self.symbolic_locals[inst.argval]
@@ -817,6 +884,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         return source
 
     def LOAD_GLOBAL(self, inst):
+        import pdb
+        pdb.set_trace()
         if sys.version_info >= (3, 11):
             if inst.arg % 2:
                 self.PUSH_NULL(inst)
@@ -843,6 +912,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         except KeyError:
             return self.load_builtin(inst)
 
+        import pdb
+        pdb.set_trace()
         source = self.get_global_source(name)
         self.push(VariableBuilder(self, source)(value))
 
@@ -967,6 +1038,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         self.LOAD_ATTR(inst)
 
     def load_builtin(self, inst):
+        #import pdb
+        #pdb.set_trace()
         if inst.argval not in self.f_builtins:
             raise NameError(f"name '{inst.argval}' is not defined")
         val = self.f_builtins[inst.argval]
@@ -979,7 +1052,23 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             self.push(ConstantVariable(value=val))
 
     def jump(self, inst):
-        self.instruction_pointer = self.indexof[inst.target]
+        #self.instruction_pointer = self.indexof[inst.target]
+
+        import pdb
+        pdb.set_trace()
+        #TODO: boh here one needs to compare whether the jump instruction is really from the for-loop and not anything else
+        if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack):
+            for_name = self.output.graph.for_loop_instr_stack[-1][0]
+            self.output.graph.create_node(op="for_loop_end", target='None',
+                                          args=None,
+                                          kwargs=None,
+                                          name=for_name + '_end',
+                                          type_expr=None)
+
+            self.output.graph.for_loop_instr_stack.pop()
+            self.instruction_pointer = self.indexof[inst.target.target]
+        else:
+            self.instruction_pointer = self.indexof[inst.target]
 
     JUMP_FORWARD = jump
     JUMP_ABSOLUTE = jump
@@ -1032,6 +1121,10 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             self.push(tos)
 
     def FOR_ITER(self, inst):
+        #This instruction is just skipped and the next instruction is placed on the list of instructions
+        #TODO: boh Ideally the node to the graph and the range is extracted from this instruction
+        #import pdb
+        #pdb.set_trace()
         it = self.pop()
         if isinstance(it, ListIteratorVariable):
             self.output.guards.update(it.guards)
@@ -1041,6 +1134,11 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
                 self.push(next_iter)
                 self.push(val)
             except StopIteration:
+                print('Stop iteration met!')
+                #import pdb
+                #pdb.set_trace()
+                #if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack):
+                #    self.output.graph.for_loop_instr_stack.pop()
                 self.jump(inst)
         else:
             unimplemented(f"FOR_ITER {typestr(it)}")
@@ -1107,7 +1205,33 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             )
 
     def GET_ITER(self, inst):
-        self.call_function(BuiltinVariable(iter), [self.pop()], {})
+        #print(self.symbolic_locals)
+        #import pdb
+        #pdb.set_trace()
+
+        #Extract the loop bounds
+        args = self.pop()
+        self.call_function(BuiltinVariable(iter), [args], {})
+        #self.output.guards
+
+        import pdb
+        pdb.set_trace()
+
+        #TODO: boh link this to the symbolic shapes
+        #TODO: boh in fx/graph.py every node has a num_users variable and in case of the loop bounds being one of them, increase the counter
+        if not config.unroll_for_iter:
+            for_name = 'for_' + str(len(self.output.graph.for_loop_instr_stack)) + '_' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
+            loop_variable_name = ''.join(random.choices(string.ascii_lowercase, k=3))
+            self.output.graph.for_loop_instr_stack.append((for_name, inst))
+            self.output.graph.for_loop_instr[for_name] = {'bounds': args.as_proxy(),
+                                                          'ins_nodes' : [],
+                                                          'var_name': None}
+
+            self.output.graph.create_node(op="for_loop", target='None',
+                                          args=(loop_variable_name, args.as_proxy().start, [n for n in self.output.graph.nodes][0]),
+                                          kwargs=None,
+                                          name=for_name,
+                                          type_expr=None)
 
     @break_graph_if_unsupported(push=1)
     def CALL_FUNCTION(self, inst):
@@ -1258,6 +1382,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
     def BUILD_TUPLE(self, inst):
         items = self.popn(inst.argval)
         options = VariableTracker.propagate(items)
+        #import pdb
+        #pdb.set_trace()
         self.push(TupleVariable(items, **options))
 
     def BUILD_SLICE(self, inst):
@@ -1708,6 +1834,9 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
     def CALL(self, inst):
         # see https://docs.python.org/3.11/library/dis.html#opcode-CALL
         # for convention
+        #This introduces the guard of the constant shape of the time dimension
+        #import pdb
+        #pdb.set_trace()
         contents = self.popn(inst.arg + 2)
         if isinstance(contents[0], NullVariable):
             fn = contents[1]
@@ -1724,6 +1853,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         else:
             args = args + contents[2:]
             kwargs = {}
+        #import pdb
+        #pdb.set_trace()
         self.call_function(fn, args, kwargs)
         self.kw_names = None
 
@@ -1983,7 +2114,7 @@ class InstructionTranslator(InstructionTranslatorBase):
                 frame_state,
                 local_scope=f_locals,
                 global_scope=f_globals,
-                f_code=f_code,
+                f_code=f_code
             ),
             instructions=instructions,
             f_locals=f_locals,
@@ -2012,6 +2143,10 @@ class InstructionTranslator(InstructionTranslatorBase):
             vars = list(code_options["co_varnames"])
             vars.extend(x for x in self.cell_and_freevars() if x not in vars)
 
+            #import pdb
+            #pdb.set_trace()
+            #ref = f_locals['input']
+            #f_locals['t'] = torch.ones(1, device=ref.device) * 4
             self.symbolic_locals = collections.OrderedDict(
                 (
                     k,
@@ -2020,6 +2155,8 @@ class InstructionTranslator(InstructionTranslatorBase):
                 for k in vars
                 if k in f_locals
             )
+            #import pdb
+            #pdb.set_trace()
 
             # symbolic_locals contains the mapping from original f_locals to the
             # Variable objects. During the Variable building phase, each object also
@@ -2150,6 +2287,8 @@ class InstructionTranslator(InstructionTranslatorBase):
             f"torchdynamo done tracing {self.f_code.co_name} (RETURN_VALUE)",
         )
         log.debug("RETURN_VALUE triggered compile")
+        import pdb
+        pdb.set_trace()
         self.output.compile_subgraph(
             self,
             reason=GraphCompileReason(

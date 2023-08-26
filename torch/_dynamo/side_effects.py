@@ -332,6 +332,8 @@ class SideEffects:
         return [var for var in self.id_to_variable.values() if self.is_modified(var)]
 
     def codegen_save_tempvars(self, cg: PyCodegen):
+        import pdb
+        pdb.set_trace()
         for var in self._get_modified_vars():
             if isinstance(
                 var.mutable_local, (AttributeMutationExisting, AttributeMutationNew)
@@ -376,6 +378,8 @@ class SideEffects:
             )
 
     def codegen_update_mutated(self, cg: PyCodegen):
+        import pdb
+        pdb.set_trace()
         suffixes = []
         for var in self._get_modified_vars():
             if isinstance(var, variables.ListVariable):

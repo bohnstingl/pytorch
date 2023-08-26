@@ -415,6 +415,10 @@ def _compile(
 
     def transform(instructions, code_options):
         nonlocal output
+
+        #import pdb
+        #pdb.set_trace()
+
         tracer = InstructionTranslator(
             instructions,
             code,
@@ -431,6 +435,9 @@ def _compile(
         )
         with tracing(tracer.output.tracing_context):
             tracer.run()
+
+        #import pdb
+        #pdb.set_trace()
         output = tracer.output
         assert output is not None
         assert output.output_instructions
@@ -443,6 +450,8 @@ def _compile(
             instructions[:] = remove_pointless_jumps(remove_dead_code(instructions))
 
     try:
+        #import pdb
+        #pdb.set_trace()
         for attempt in itertools.count():
             try:
                 out_code = transform_code_object(code, transform)
@@ -475,6 +484,8 @@ def _compile(
                     format_bytecode(prefix, name, filename, line_no, code)
                 )
 
+        #import pdb
+        #pdb.set_trace()
         log_bytecode(
             "ORIGINAL BYTECODE",
             code.co_name,

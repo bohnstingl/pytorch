@@ -325,6 +325,8 @@ class Loops(IRNode):
     ranges: List[Expr]
 
     def __str__(self, names=("ranges",)):
+        import pdb
+        pdb.set_trace()
         return self.str_helper(
             [
                 f"'{self.device.type}'",
@@ -358,6 +360,8 @@ class Loops(IRNode):
 
     @classmethod
     def create(cls, *args, **kwargs):
+        #import pdb
+        #pdb.set_trace()
         origin_node = kwargs.pop("origin_node", None)
         tb = kwargs.pop("traceback", None)
         r = cls(*args, **kwargs)
@@ -773,6 +777,9 @@ class Reduction(Loops):
     @staticmethod
     def _unroll_reduction_fn(inner_fn, reduction_ranges, reduction_type, src_dtype):
         """Convert inner_fn from a reduction to an pointwise"""
+        #import pdb
+        #pdb.set_trace()
+        
         reduction_ranges = [
             V.graph.sizevars.evaluate_static_shape(x) for x in reduction_ranges
         ]
@@ -2349,6 +2356,9 @@ class ComputedBuffer(Buffer):
         body = LoopBody(
             body, [iter_reindex(iter_vars), reduce_reindex(reduce_vars)], var_ranges
         )
+
+        #import pdb
+        #pdb.set_trace()
         return (iter_ranges, reduce_ranges), body
 
     @staticmethod
@@ -4350,6 +4360,9 @@ class StorageBox(MutableBox):
             ),
             data=self.data,
         )
+
+        #import pdb
+        #pdb.set_trace()
         self.data.name = V.graph.register_buffer(self.data)
         self.data.origins = self.origins
         self.data.origin_node = origin_node
@@ -4475,6 +4488,10 @@ class LoopBody:
         self.indirect_vars = []
         self.root_block = LoopBodyBlock(self, fn, args)
         self.indexing = None
+
+        print('Inside LoopBody IR')
+        #import pdb
+        #pdb.set_trace()
 
     @cache_on_self
     def get_nodes(self):

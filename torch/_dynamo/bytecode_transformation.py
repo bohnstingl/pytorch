@@ -1018,6 +1018,8 @@ def get_code_keys():
 
 
 def transform_code_object(code, transformations, safe=False):
+    #import pdb
+    #pdb.set_trace()
     keys = get_code_keys()
     code_options = {k: getattr(code, k) for k in keys}
     assert len(code_options["co_varnames"]) == code_options["co_nlocals"]
@@ -1026,12 +1028,16 @@ def transform_code_object(code, transformations, safe=False):
     propagate_line_nums(instructions)
 
     transformations(instructions, code_options)
+    #import pdb
+    #pdb.set_trace()
     return clean_and_assemble_instructions(instructions, keys, code_options)[1]
 
 
 def clean_and_assemble_instructions(
     instructions: List[Instruction], keys: List[str], code_options: Dict[str, Any]
 ) -> Tuple[List[Instruction], types.CodeType]:
+    #import pdb
+    #pdb.set_trace()
     # also implicitly checks for no duplicate instructions
     check_inst_exn_tab_entries_valid(instructions)
 

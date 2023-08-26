@@ -456,6 +456,8 @@ class SchedulerNode(BaseSchedulerNode):
         return var_ranges
 
     def codegen(self, index_vars):
+        #import pdb
+        #pdb.set_trace()
         var_ranges = self.ranges_from_index_vars(index_vars)
         try:
             with V.set_ops_handler(
@@ -656,6 +658,8 @@ class ForeachKernelSchedulerNode(FusedSchedulerNode):
         raise NotImplementedError
 
     def codegen(self):
+        #import pdb
+        #pdb.set_trace()
         self.node.get_store_function()(self.node.make_loader()())
 
     def can_free(self):
@@ -747,6 +751,8 @@ class Scheduler:
             *V.graph.constants.keys(),
         }
 
+        #import pdb
+        #pdb.set_trace()
         self.nodes = [self.create_scheduler_node(n) for n in nodes]
 
         # some new constants could have been created above
@@ -818,6 +824,8 @@ class Scheduler:
             raise NotImplementedError(node)
 
     def create_foreach_nodes(self):
+        #import pdb
+        #pdb.set_trace()
         removed_node_names = set()
         fe_nodes = []
         for names in V.graph.lists.values():
@@ -1404,6 +1412,8 @@ class Scheduler:
 
     @dynamo_timed
     def codegen(self):
+        #import pdb
+        #pdb.set_trace()
         for node in self.nodes:
             self.enter_context(node)
             self.buffer_names_no_longer_needed.update(node.last_usage)
@@ -1430,6 +1440,8 @@ class Scheduler:
 
             self.buffer_names_to_free.update(node.last_usage)
 
+            #import pdb
+            #pdb.set_trace()
             if node.is_template():
                 node, *epilogue = node.get_nodes()
                 self.get_backend(device).codegen_template(node, epilogue)

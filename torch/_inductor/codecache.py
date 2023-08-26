@@ -1248,6 +1248,9 @@ class AsyncCompile:
         return [t.result() for t in [cls.pool().submit(fn, x) for x in seq]]
 
     def triton(self, kernel_name, source_code):
+        import pdb
+        pdb.set_trace()
+        
         _compile_start()
 
         if config.compile_threads > 1:

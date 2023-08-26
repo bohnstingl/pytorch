@@ -705,6 +705,9 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
         from .decorators import disable
 
+        #import pdb
+        #pdb.set_trace()
+
         self.partial_convert = partial_convert
         self.compile_subgraph_reason = reason
 
@@ -736,6 +739,10 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
         for block in reversed(tx.block_stack):
             block.exit(tx)
+
+        import pdb
+        pdb.set_trace()
+        print([n for n in self.graph.nodes])
 
         self.cleanup_graph()
         tx.prune_dead_locals()
@@ -799,6 +806,9 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             )
         else:
             graph_output_var = self.new_var("graph_out")
+            print([n for n in self.graph.nodes])
+            import pdb
+            pdb.set_trace()
             pass1 = PyCodegen(tx, root, graph_output_var)
             self.side_effects.codegen_save_tempvars(pass1)
             pass1.foreach(stack_values)
@@ -814,6 +824,10 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             self.side_effects.codegen_save_tempvars(pass2)
             pass2.foreach(stack_values)
             self.side_effects.codegen_update_mutated(pass2)
+
+            print([n for n in self.graph.nodes])
+            import pdb
+            pdb.set_trace()
 
             output = []
             if count_calls(self.graph) != 0 or len(pass2.graph_outputs) != 0:
@@ -908,6 +922,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         # free a bit of memory
         self.real_value_cache.clear()
 
+        #import pdb
+        #pdb.set_trace()
         gm = fx.GraphModule(root, self.graph)
         gm.compile_subgraph_reason = self.compile_subgraph_reason
         name = unique_id("__compiled_fn")
@@ -918,8 +934,12 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             "%s", LazyString(lambda: self.get_graph_sizes_log_str(name))
         )
 
+        import pdb
+        pdb.set_trace()
         compiled_fn = self.call_user_compiler(gm)
         compiled_fn = disable(compiled_fn)
+        import pdb
+        pdb.set_trace()
 
         counters["stats"]["unique_graphs"] += 1
         self.install_global(name, compiled_fn)
@@ -944,6 +964,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
     @dynamo_timed(phase_name="backend_compile")
     def call_user_compiler(self, gm: fx.GraphModule) -> CompiledFn:
+        import pdb
+        pdb.set_trace()
         tot = 0
         placeholders = []
         for node in gm.graph.nodes:
@@ -970,6 +992,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             if config.verify_correctness:
                 compiler_fn = WrapperBackend(compiler_fn)
 
+            import pdb
+            pdb.set_trace()
             compiled_fn = compiler_fn(gm, self.example_inputs())
             _step_logger()(logging.INFO, f"done compiler function {name}")
             assert callable(compiled_fn), "compiler_fn did not return callable"
@@ -1093,6 +1117,8 @@ class SubgraphTracer(fx.Tracer):
     def __init__(self, output_graph, parent=None):
         super().__init__()
         self.output_graph = weakref.proxy(output_graph)
+        #import pdb
+        #pdb.set_trace()
         self.graph = torch.fx.Graph()
         # Map from graph input name to its placeholder proxy object, where the
         # map's keys give all current placeholder node names and can be used to

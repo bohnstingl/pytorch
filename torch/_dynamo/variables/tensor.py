@@ -668,6 +668,8 @@ class SymNodeVariable(VariableTracker):
         return self.proxy
 
     def evaluate_expr(self, output_graph=None):
+        #import pdb
+        #pdb.set_trace()
         return guard_scalar(self.sym_num)
 
     def call_method(

@@ -187,12 +187,16 @@ class CachingAutotuner(KernelInterface):
         with torch.cuda.device(compile_meta["device"]):
             # need to initialize context
             torch.cuda.synchronize(torch.cuda.current_device())
+            #import pdb
+            #pdb.set_trace()
             binary = triton.compile(
                 self.fn,
                 **compile_meta,
             )
             binary._init_handles()
 
+        #import pdb
+        #pdb.set_trace()
         call_args = [
             arg
             for i, arg in enumerate(self.fn.arg_names)
@@ -228,6 +232,9 @@ class CachingAutotuner(KernelInterface):
         launcher.n_regs = getattr(binary, "n_regs", None)
         launcher.n_spills = getattr(binary, "n_spills", None)
         launcher.shared = getattr(binary, "shared", None)
+
+        #import pdb
+        #pdb.set_trace()
         launcher.store_cubin = config.triton.store_cubin
         # store this global varible to avoid the high overhead of reading it when calling run
         if launcher.store_cubin:
@@ -954,6 +961,8 @@ def template(num_stages, num_warps, meta, filename=None):
     """
     Compile a triton template
     """
+    #import pdb
+    #pdb.set_trace()
     return cached_autotune(
         None,
         [triton.Config({}, num_stages=num_stages, num_warps=num_warps)],
@@ -967,6 +976,8 @@ def foreach(meta, num_warps, filename=None):
     """
     Compile a triton foreach kernel
     """
+    #import pdb
+    #pdb.set_trace()
     return cached_autotune(
         None,
         [triton.Config({}, num_stages=1, num_warps=num_warps)],

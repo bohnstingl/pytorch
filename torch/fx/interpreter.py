@@ -125,6 +125,8 @@ class Interpreter:
                     desc=f"{self.name}: {str(list(self.module.graph.nodes)) if config.verbose_progress else ''}",
                     initial=0, position=0, leave=True, disable=config.disable_progress, delay=0)
 
+        #import pdb
+        #pdb.set_trace()
         for node in self.module.graph.nodes:
             pbar.update(1)
             if node in self.env:
