@@ -414,6 +414,8 @@ class KernelArgs:
         )
 
     def input(self, name):
+        import pdb
+        pdb.set_trace()
         if V.graph.scheduler:
             name = V.graph.scheduler.mutation_real_name.get(name, name)
         assert name not in V.graph.removed_buffers, name
@@ -426,6 +428,8 @@ class KernelArgs:
         return self._lookup("in_ptr", self.input_buffers, name)
 
     def output(self, name):
+        import pdb
+        pdb.set_trace()
         if V.graph.scheduler:
             name = V.graph.scheduler.mutation_real_name.get(name, name)
         assert name not in V.graph.removed_buffers, name
@@ -458,6 +462,8 @@ class KernelArgs:
         return name
 
     def size(self, name):
+        import pdb
+        pdb.set_trace()
         if str(name) == "seed":
             self.sizevars["seed"] = "seed"
             return "seed"
@@ -827,6 +833,8 @@ class Kernel(CodeGen):
                             fx_node, ValueRanges.unknown()
                         )
 
+                    #import pdb
+                    #pdb.set_trace()
                     csevar = self.cse.generate(
                         self.compute,
                         getattr(parent_handler, name)(*args, **kwargs),

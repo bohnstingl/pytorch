@@ -200,8 +200,8 @@ class BaseListVariable(VariableTracker):
 
 class RangeVariable(BaseListVariable):
     def __init__(self, items, **kwargs):
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         #TODO: boh Fix this 
         items_to_map = items
         #if 'instr' in kwargs:

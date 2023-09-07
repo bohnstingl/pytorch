@@ -420,6 +420,8 @@ class TritonOverrides(OpOverrides):
 
     @staticmethod
     def sigmoid(x):
+        #import pdb
+        #pdb.set_trace()
         return f"tl.sigmoid({x})"
 
     @staticmethod
@@ -1247,7 +1249,24 @@ class TritonKernel(Kernel):
 
         return sympy_symbol(str(var))
 
+    def for_loop(self, name: str, index: sympy.Expr):
+        import pdb
+        pdb.set_trace()
+        var = self.args.input(name)
+        indirect_indexing = self.is_indirect_indexing(index)
+        original_index = index
+        index, mask_vars, mask, expand_str = self.indexing(index)
+
+        # Keep the variable in cache if were going to reuse it. Equiv., if any of the following hold
+        #  1) We are doing broadcasting
+        #  2) It will be used later and it won't be CSE'd. Equiv., if all the following hold
+        #   2.1) We are in a reduction loop
+        #   2.2) Its not its last use
+        #   2.3) This load will not be lifted to the body
+
     def load(self, name: str, index: sympy.Expr):
+        import pdb
+        pdb.set_trace()
         var = self.args.input(name)
         indirect_indexing = self.is_indirect_indexing(index)
         original_index = index
@@ -1279,6 +1298,8 @@ class TritonKernel(Kernel):
         else:
             other = ""
 
+        import pdb
+        pdb.set_trace()
         append_broadcast = None
         if V.graph.is_unspec_arg(name):
             line = var
@@ -1428,6 +1449,8 @@ class TritonKernel(Kernel):
         cond = " & ".join(masks)
 
         if self.persistent_reduction:
+            #import pdb
+            #pdb.set_trace()
             masked_value = self.cse.generate(
                 self.compute, f"tl.where({cond}, {value}, {default})"
             )
@@ -1582,8 +1605,10 @@ class TritonKernel(Kernel):
         ):
             return
 
-        #import pdb
-        #pdb.set_trace()
+        print(self.loads._lines)
+        print(self.compute._lines)
+        import pdb
+        pdb.set_trace()
 
         if self.inside_reduction and not self.persistent_reduction:
             self.body.writeline("for roffset in range(0, rnumel, RBLOCK):")
@@ -1706,6 +1731,8 @@ class TritonKernel(Kernel):
         return result
 
     def codegen_kernel(self, name=None):
+        #import pdb
+        #pdb.set_trace()
         from triton import next_power_of_2
 
         code = IndentedBuffer()
@@ -1827,11 +1854,11 @@ class TritonKernel(Kernel):
             """
         code.splice(heuristics_line)
         code.writeline(f"def {name or 'KERNEL_NAME'}({', '.join(argdefs)}):")
-        #import pdb
-        #pdb.set_trace()
+        import pdb
+        pdb.set_trace()
         self.codegen_body()
-        #import pdb
-        #pdb.set_trace()
+        import pdb
+        pdb.set_trace()
         with code.indent():
             self.codegen_static_numels(code)
             for old, new in self.args.aliases():
@@ -2124,6 +2151,8 @@ class TritonScheduling:
             current_loop_writes.clear()
             is_current_reductions.clear()
 
+        #import pdb
+        #pdb.set_trace()
         for index, node in enumerate(nodes):
             if node in done:
                 continue
@@ -2328,6 +2357,9 @@ class TritonScheduling:
         def current_reduction_nodes(nodes):
             return itertools.takewhile(lambda n: n is not DisableReduction, nodes)
 
+        #TODO: boh here is the place probably to change the code if there are multiple code buffers due to values being stored in a list
+        #import pdb
+        #pdb.set_trace()
         with kernel:
             stack = contextlib.ExitStack()
             kernel.set_last_usage(current_reduction_nodes(node_schedule))
@@ -2344,6 +2376,8 @@ class TritonScheduling:
                     # TODO - use split ranges ?
                     indexing_dtype_strength_reduction(node._body)
                     index_vars = kernel.split_and_set_ranges(node.get_ranges())
+                    #import pdb
+                    #pdb.set_trace()
                     node.codegen(index_vars)
 
     def define_kernel(self, src_code, node_schedule):

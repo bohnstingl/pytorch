@@ -563,7 +563,15 @@ class SimplifyIndexing(V.WrapperHandler):  # type: ignore[name-defined]
             [Expr], Expr
         ] = lambda index: V.graph.sizevars.simplify_with_ranges(index, var_ranges)
 
+    def for_loop(self, for_loop_variable: str, index: sympy.Expr):#, index_stop: sympy.Expr, index_step: sympy.Expr):
+        import pdb
+        pdb.set_trace()
+        return self._inner.for_loop(name, self._simplify(index))
+
     def load(self, name: str, index: sympy.Expr):
+        print(index)
+        import pdb
+        pdb.set_trace()
         return self._inner.load(name, self._simplify(index))
 
     def store(self, name, index, value, mode=None):

@@ -3674,6 +3674,9 @@ def aot_module_simplified(
     :func:`aot_module_simplified` removes these overheads.
     """
 
+    #import pdb
+    #pdb.set_trace()
+
     params = {
         **dict(mod.named_parameters(remove_duplicate=False)),
         **dict(mod.named_buffers(remove_duplicate=False)),
@@ -3752,6 +3755,8 @@ def aot_module_simplified(
         no_tangents=False,
     )
 
+    #import pdb
+    #pdb.set_trace()
     compiled_fn = create_aot_dispatcher_function(
         functional_call,
         full_args,

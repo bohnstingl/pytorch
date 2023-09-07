@@ -480,15 +480,19 @@ class CodeGen:
             return f"[{', '.join(str(x) for x in shape)}]"
 
         def emit_node(node : Node, for_loop_cnt: int):
-            import pdb
-            pdb.set_trace()
+            #import pdb
+            #pdb.set_trace()
 
             intendation = '    '*for_loop_cnt
             maybe_type_annotation = '' if node.type is None else f' : {type_repr(node.type)}'
 
-            if for_loop_cnt > 0:
+            '''if for_loop_cnt > 0:
+                #In case of a for-loop being active:
+                #1.) If a variable is just used in the first iteration and afterwards not any more, then this variable needs to be overwritten inside the loop.
+                #2.) If a there is a dependency from one loop iteration to the next iteration, then this variable needs to be overwritten inside the loop.
+                #3.) If there is a depency of variables after the loop to inside the loop, then this variable needs to be updated.
                 import pdb
-                pdb.set_trace()
+                pdb.set_trace()'''
 
             if verbose:
                 # override annotation with more detailed information
@@ -518,6 +522,8 @@ class CodeGen:
                 body.append(intendation + \
                     f'{repr(node)}{maybe_type_annotation} = {_format_target(repr(node.args[0]), node.target)}'
                     f'({_format_args(node.args[1:], node.kwargs)})')
+                if 'for_loop_target_node' in node.meta and node.meta['for_loop_target_node'] is not None and node.name in body[-1].split(' = ')[0]:
+                    body[-1] = ' = '.join([node.meta['for_loop_target_node'].name, body[-1].split(' = ')[1]])
                 return
             elif node.op == 'call_function':
                 assert callable(node.target)
@@ -525,11 +531,26 @@ class CodeGen:
                 if getattr(node.target, "__module__", "") == '_operator' and node.target.__name__ in magic_methods:
                     assert isinstance(node.args, tuple)
                     if node.sym_args is not None:
+                        #TODO: boh This does not work in general
+                        
+                        #new_item0 = tx.symbolic_locals[sym_args[1][0].value]
+                        #import pdb
+                        #pdb.set_trace()
+                        #from torch._dynamo.variables.base import VariableTracker
+                        #options = VariableTracker.propagate(node.sym_args[1].items)
+                        #cpy = VariableTracker.copy(node.args)
+                        #from torch._dynamo.variables.lists import TupleVariable
+                        #new_tuple = TupleVariable([node.args[1][0]] + list(node.args[1])[1:], **options)
+                        #node.original_args = cpy
+                        node.args = (node.args[0], tuple([node.sym_args[1].items[0].value, node.args[1][1]]))
                         body.append(intendation + f'{repr(node)}{maybe_type_annotation} = '
-                                f'{magic_methods[node.target.__name__].format(*(repr(a) for a in node.sym_args))}')
+                                f'{magic_methods[node.target.__name__].format(*(repr(a) for a in node.args))}')
+                        body[-1] = body[-1].replace('\'', '')
                     else:
                         body.append(intendation + f'{repr(node)}{maybe_type_annotation} = '
                                     f'{magic_methods[node.target.__name__].format(*(repr(a) for a in node.args))}')
+                    if 'for_loop_target_node' in node.meta and node.meta['for_loop_target_node'] is not None and node.name in body[-1].split(' = ')[0]:
+                        body[-1] = ' = '.join([node.meta['for_loop_target_node'].name, body[-1].split(' = ')[1]])
                     return
 
                 # pretty print inplace operators; required for jit.script to work properly
@@ -558,6 +579,8 @@ class CodeGen:
                 assert isinstance(node.target, str)
                 body.append(intendation + f'{repr(node)}{maybe_type_annotation} = '
                             f'{_format_target(root_module, node.target)}({_format_args(node.args, node.kwargs)})')
+                if 'for_loop_target_node' in node.meta and node.meta['for_loop_target_node'] is not None and node.name in body[-1].split(' = ')[0]:
+                    body[-1] = ' = '.join([node.meta['for_loop_target_node'].name, body[-1].split(' = ')[1]])
                 return
             elif node.op == 'get_attr':
                 assert isinstance(node.target, str)
@@ -569,17 +592,17 @@ class CodeGen:
                 body.append(intendation + self.generate_output(node.args[0]))
                 return
             elif node.op == 'for_loop':
-                import pdb
-                pdb.set_trace()
+                #import pdb
+                #pdb.set_trace()
                 #if not config.unroll_for_iter:
                 #Add intentation level
                 for_name = node.name
                 #self.for_loop_instr[for_name]['var_name']
-                body.append(intendation + f'for {node.args[0]} in range({node.args[1]}, {node.args[2]}):')
+                body.append(intendation + f'for {node.args[0]} in range({node.args[1]}, {node.args[2][1]}):')
                 return
             elif node.op == 'for_loop_end':
-                import pdb
-                pdb.set_trace()
+                #import pdb
+                #pdb.set_trace()
                 #Remove intentation level
                 #if not config.unroll_for_iter:
                 print('Ending for-loop')
@@ -599,14 +622,17 @@ class CodeGen:
 
             if node.op == 'for_loop':
                 for_loop_cnt += 1
-            elif node.op == 'for_loop_end':
-                for_loop_cnt -= 1
 
             if for_loop_cnt == 0:
                 delete_unused_values(node)
+            else:
+                body.append('\n')
 
-        import pdb
-        pdb.set_trace()
+            if node.op == 'for_loop_end':
+                for_loop_cnt -= 1
+
+        #import pdb
+        #pdb.set_trace()
 
         if len(body) == 0:
             # If the Graph has no non-placeholder nodes, no lines for the body
@@ -638,8 +664,8 @@ class CodeGen:
 {prologue}
 {code}"""
 
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         to_patch = '\n\n\ndef forward(self, s1 : torch.SymInt, s2 : torch.SymInt, L_input_ : torch.Tensor):\n    l_input_ = L_input_\n    getitem = l_input_[(0, slice(None, None, None))]\n    size = l_input_.size()\n    getitem_4 = l_input_[(0, slice(None, None, None))]\n    add = getitem_4 + getitem;  getitem_4 = getitem = None\n    getitem_5 = l_input_[(1, slice(None, None, None))]\n    add_1 = getitem_5 + add;  getitem_5 = add = None\n    getitem_6 = l_input_[(2, slice(None, None, None))]\n    add_2 = getitem_6 + add_1;  getitem_6 = add_1 = None\n    getitem_7 = l_input_[(3, slice(None, None, None))];  l_input_ = None\n    add_3 = getitem_7 + add_2;  getitem_7 = add_2 = None\n    return (add_3,)\n    '
 
         #Patch fn_code
@@ -790,6 +816,8 @@ class Graph:
 
         self.for_loop_instr_stack = []
         self.for_loop_instr = {}
+        self.for_loop_cnt = 0
+        self.for_loop_it_cnts = {}
 
     @property
     def owning_module(self):
@@ -890,9 +918,16 @@ class Graph:
 
             The newly-created and inserted node.
         """
-        #print((op, args))
+        
+        #print(op, name)
         #import pdb
         #pdb.set_trace()
+        '''#print((op, args))
+        if op == 'output':
+            import pdb
+            pdb.set_trace()
+            print('Output node added!')
+        '''
         assert op in ('call_function', 'call_method', 'get_attr', 'call_module', 'placeholder', 'output', 'for_loop', 'for_loop_end')
         args = () if args is None else args
         kwargs = {} if kwargs is None else kwargs
@@ -901,11 +936,31 @@ class Graph:
 
         candidate = name if name is not None else self._target_to_str(target)
         name = self._graph_namespace.create_name(candidate, None)
-        n = Node(self, name, op, target, args, kwargs, type_expr)
+        for_name = ''
+        loop_iteration = -1
 
+        #TODO: boh there is not config.unroll available here
         if len(self.for_loop_instr_stack) > 0:
+            #import pdb
+            #pdb.set_trace()
             for_name = self.for_loop_instr_stack[-1][0]
-            n.part_of_for_loop = for_name
+            if self.for_loop_it_cnts[for_name] >= 0:
+                loop_iteration = self.for_loop_it_cnts[for_name]
+            else:
+                for_name = ''
+                loop_iteration = -1
+
+        n = Node(self, name, op, target, args, kwargs, type_expr, part_of_for_loop=for_name+str(loop_iteration))
+
+        if len(self.for_loop_instr_stack) > 0 and for_name != '':
+            n.meta['for_loop_name'] = for_name
+            n.meta['for_loop_iteration'] = loop_iteration
+            n.meta['for_loop_properties'] = {}
+
+            self.for_loop_instr[for_name]['nodes'].append(n)
+            '''#import pdb
+            #pdb.set_trace()
+            for_name = self.for_loop_instr_stack[-1][0]
             if len(self.for_loop_instr[for_name]['ins_nodes']) > 0:
                 self.for_loop_instr[for_name]['ins_nodes'][-1] = [self.for_loop_instr[for_name]['ins_nodes'][-1][0], n]
             else:
@@ -913,7 +968,7 @@ class Graph:
                 import pdb
                 pdb.set_trace()
                 exit()
-                self.for_loop_instr[for_name]['ins_nodes'].append(n)
+            '''
 
         self._graph_namespace.associate_name_with_obj(name, n)
 
@@ -1399,14 +1454,16 @@ class Graph:
                 raise RuntimeError(f'Argument \'{arg}\'{context_str}does not belong to this Graph, '
                                    f'but was used as an argument! If you are copying nodes from another graph, make '
                                    f'sure to use ``arg_transform`` on node_copy() to remap values\n{self}')
-            if arg not in seen_values:
+            #TODO: boh config is not defined here
+            #if (arg not in seen_values and config.unroll_for_iter) or (arg not in seen_values and not config.unroll_for_iter and not arg == n):
+            if arg not in seen_values and not arg == n:
                 raise RuntimeError(f'Argument \'{arg}\'{context_str}was used before it has been '
                                    f'defined! Please check that Nodes in the graph are topologically ordered\n{self}')
 
         seen_names : Set[str] = set()
         seen_values : Set[Node] = set()
         for node in self.nodes:
-            if node.op not in ['placeholder', 'call_method', 'call_module', 'call_function', 'get_attr', 'output']:
+            if node.op not in ['placeholder', 'call_method', 'call_module', 'call_function', 'get_attr', 'output', 'for_loop', 'for_loop_end']:
                 raise RuntimeError(f'Node {node} had unknown opcode {node.op}!')
             if node.graph is not self:
                 raise RuntimeError(f'Node \'{node}\' does not belong to this Graph!')

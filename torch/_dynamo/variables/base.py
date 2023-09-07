@@ -333,7 +333,7 @@ class VariableTracker(metaclass=HasPostInit):
         guards: Optional[Set] = None,
         source: Source = None,
         mutable_local: MutableLocal = None,
-        recursively_contains: Optional[Set] = None,
+        recursively_contains: Optional[Set] = None
     ):
         super().__init__()
         self.guards = guards or set()

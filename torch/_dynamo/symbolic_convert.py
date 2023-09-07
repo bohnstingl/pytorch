@@ -167,9 +167,11 @@ def stack_op(fn: typing.Callable[..., object]):
 
     @functools.wraps(fn)
     def impl(self: "InstructionTranslatorBase", inst: Instruction):
-        if inst.opcode == 25:
-            import pdb
-            pdb.set_trace()
+        #if inst.opcode == 25:
+        #    import pdb
+        #    pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         self.push(fn_var.call_function(self, self.popn(nargs), {}))
 
     return impl
@@ -563,8 +565,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         ):
             raise AssertionError(f"Attempt to trace forbidden callable {inner_fn}")
 
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         self.push(fn.call_function(self, args, kwargs))
 
     def update_locals_and_stack(self, oldvar: VariableTracker, newvar: VariableTracker):
@@ -701,7 +703,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
                 #import pdb
                 #pdb.set_trace()
                 for_name = self.output.graph.for_loop_instr_stack[-1][0]
-                self.output.graph.for_loop_instr[for_name]['ins_nodes'].append([inst])
+                if self.output.graph.for_loop_it_cnts[for_name] < 1:
+                    self.output.graph.for_loop_instr[for_name]['ins_nodes'].append([inst])
 
             getattr(self, inst.opname)(inst)
 
@@ -724,8 +727,9 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         assert self.checkpoint is not None
         continue_inst, state = self.checkpoint
         self.restore_graphstate(state)
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
+        #print([n.meta['for_loop_name'] + '-' + n.meta['for_loop_name'] for n in self.output.graph.nodes])
         self.output.compile_subgraph(
             self,
             partial_convert=True,
@@ -806,9 +810,12 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             unimplemented("undefined LOAD_FAST")
 
         if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack) > 0 and name == self.output.graph.for_loop_instr[self.output.graph.for_loop_instr_stack[-1][0]]['var_name']:
-            import pdb
-            pdb.set_trace()
+            #import pdb
+            #pdb.set_trace()
             #print('Detected that variable should be replaced with loop variable')
+            #var = ConstantVariable(value=name)
+            #var.for_loop_variable = name
+            #self.push(var)
             self.push(ConstantVariable(value=name))
             #var = self.symbolic_locals[name]
             #var.sym_name = name
@@ -834,8 +841,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         self.symbolic_locals[inst.argval] = self.pop()
 
         if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack) > 0:
-            import pdb
-            pdb.set_trace()
+            #import pdb
+            #pdb.set_trace()
             for_name = self.output.graph.for_loop_instr_stack[-1][0]
             if self.output.graph.for_loop_instr[for_name]['var_name'] is None:
                 self.output.graph.for_loop_instr[for_name]['var_name'] = inst.argval
@@ -884,8 +891,6 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         return source
 
     def LOAD_GLOBAL(self, inst):
-        import pdb
-        pdb.set_trace()
         if sys.version_info >= (3, 11):
             if inst.arg % 2:
                 self.PUSH_NULL(inst)
@@ -912,8 +917,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         except KeyError:
             return self.load_builtin(inst)
 
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         source = self.get_global_source(name)
         self.push(VariableBuilder(self, source)(value))
 
@@ -1054,21 +1059,27 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
     def jump(self, inst):
         #self.instruction_pointer = self.indexof[inst.target]
 
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         #TODO: boh here one needs to compare whether the jump instruction is really from the for-loop and not anything else
-        if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack):
+        '''if False and not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack):
             for_name = self.output.graph.for_loop_instr_stack[-1][0]
-            self.output.graph.create_node(op="for_loop_end", target='None',
+            n = self.output.graph.create_node(op="for_loop_end", target='None',
                                           args=None,
                                           kwargs=None,
                                           name=for_name + '_end',
                                           type_expr=None)
 
+            import pdb
+            pdb.set_trace()
+            n.meta['for_loop_start'] = None
+            n.meta['for_loop_name'] = [for_name]
+
             self.output.graph.for_loop_instr_stack.pop()
-            self.instruction_pointer = self.indexof[inst.target.target]
-        else:
+            #self.instruction_pointer = self.indexof[inst.target.target]
             self.instruction_pointer = self.indexof[inst.target]
+        else:'''
+        self.instruction_pointer = self.indexof[inst.target]
 
     JUMP_FORWARD = jump
     JUMP_ABSOLUTE = jump
@@ -1130,15 +1141,124 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             self.output.guards.update(it.guards)
             try:
                 val, next_iter = it.next_variables()
+                if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack) > 0:
+                    #import pdb
+                    #pdb.set_trace()
+                    for_name = self.output.graph.for_loop_instr_stack[-1][0]
+                    #Iterate over the nodes and take a snapshot of the usage counters so far
+                    #for n in self.output.graph.nodes:
+                    #    n.usage_snapshots.append([for_name + '_' + str(self.output.graph.for_loop_it_cnts[for_name]), n.users.keys()])
+                    self.output.graph.for_loop_it_cnts[for_name] += 1
+                    #If this is the second occurence of the FOR_ITER for a loop, remove the last added instruction
+                    if self.output.graph.for_loop_it_cnts[for_name] > 0:
+                        self.output.graph.for_loop_instr[for_name]['ins_nodes'] = self.output.graph.for_loop_instr[for_name]['ins_nodes'][:-1]
+
                 self.replace_all(it, next_iter)
                 self.push(next_iter)
                 self.push(val)
             except StopIteration:
-                print('Stop iteration met!')
-                #import pdb
-                #pdb.set_trace()
-                #if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack):
-                #    self.output.graph.for_loop_instr_stack.pop()
+                if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack) > 0:
+                    print('Stop iteration met!')
+                    #import pdb
+                    #pdb.set_trace()
+                    #Iterate over the nodes and take a snapshot of the usage counters so far
+                    for_name = self.output.graph.for_loop_instr_stack[-1][0]
+                    self.output.graph.for_loop_it_cnts[for_name] += 1
+
+                    #for n in self.output.graph.nodes:
+                    #    n.usage_snapshots.append([for_name + '_' + str(self.output.graph.for_loop_it_cnts[for_name]), n.users.keys()])
+
+                    #import pdb
+                    #pdb.set_trace()
+                    for_name = self.output.graph.for_loop_instr_stack[-1][0]
+                    #for ins_node in self.for_loop_instr[for_name]['ins_nodes']:
+                    #    if len(ins_node) > 0:
+                    #        import pdb
+                    #        pdb.set_trace()
+
+                    for_loop_started = {}
+                    output_found = False
+                    for for_name in self.output.graph.for_loop_instr.keys():
+                        for_loop_started[for_name] = 0
+                    for n in self.output.graph.nodes:
+                        #import pdb
+                        #pdb.set_trace()
+                        for for_name in self.output.graph.for_loop_instr.keys():
+                            if for_name == n.name:
+                                for_loop_started[for_name] = 1
+                                continue
+                            elif (for_name + '_end') == n.name:
+                                for_loop_started[for_name] = 2
+                                continue
+
+                        #1.) Analyze the node users of the first iteration and determine the recurrently connected nodes  
+                        #print(n)
+                        #import pdb
+                        #pdb.set_trace()
+                        if n.name != for_name and 'for_loop_name' in n.meta and n.meta['for_loop_name'] == for_name and n.meta['for_loop_iteration'] == 0:
+                            def check_name(user_for_loop_name, user_for_loop_iteration, tar_for_name, tar_iteration):
+                                if user_for_loop_name == tar_for_name and user_for_loop_iteration == tar_iteration:
+                                    return True
+                                else:
+                                    return False
+
+                            def find_user_rec(u, tar_for_name, tar_iteration, parent=False):
+                                rec_user_node = None
+                                for user_node in u.users.keys():
+                                    if check_name(user_node.meta['for_loop_name'], user_node.meta['for_loop_iteration'], tar_for_name, tar_iteration):
+                                        #u.meta['for_loop_properties'].append('recurrent')
+                                        find_user_rec(user_node, tar_for_name, tar_iteration + 1, True)
+                                        parent = True
+                                        rec_user_node = user_node
+                                        break
+                                if parent:
+                                    u.meta['for_loop_properties']['recurrent'] = rec_user_node
+                                return rec_user_node
+
+                            #import pdb
+                            #pdb.set_trace()
+                            find_user_rec(n, for_name, 1)
+
+                        #2.) Analyze the nodes determine the initial conditions, e.g., if a node in the loop accesses nodes outside of the for-loop
+                        for for_name in self.output.graph.for_loop_instr.keys():
+                            for user in n.users.keys():
+                                #import pdb
+                                #pdb.set_trace()
+                                if user.name != for_name and 'for_loop_name' in user.meta and for_name == user.meta['for_loop_name'] and for_loop_started[for_name] == 0:
+                                    #import pdb
+                                    #pdb.set_trace()
+                                    user.meta['for_loop_properties']['input'] = n
+
+                        #3.) Analyze the nodes determine the output conditions, e.g., if a node in the loop is later used outside the for-loop
+                        for for_name in self.output.graph.for_loop_instr.keys():
+                            for user in n.users.keys():
+                                if user.name != for_name and 'for_loop_name' in user.meta and for_name != user.meta['for_loop_name'] and for_loop_started[for_name] == 2:
+                                    #import pdb
+                                    #pdb.set_trace()
+                                    output_found = True
+                                    user.meta['for_loop_properties']['output'] = None
+
+                    #If no output node is found in the graph, the last node of the graph is considered to be the output node
+                    if not output_found:
+                        n = list(self.output.graph.nodes)[-1]
+                        n.meta['for_loop_properties']['output'] = None
+                    
+                    print([(n.name, n.meta['for_loop_properties'] if 'for_loop_properties' in n.meta else '') for n in self.output.graph.nodes])
+                    #import pdb
+                    #pdb.set_trace()
+
+                    #Append the for_end node to the graph
+                    for_loop_start_node = self.output.graph.for_loop_instr[for_name]['nodes'][0]
+                    n = self.output.graph.create_node(op="for_loop_end", target='None',
+                                                args=(for_loop_start_node,),
+                                                kwargs=None,
+                                                name=for_name + '_end',
+                                                type_expr=None)
+                    n.meta['for_loop_start'] = for_loop_start_node
+                    n.meta['for_loop_name'] = for_name
+
+                    self.output.graph.for_loop_instr_stack.pop()
+
                 self.jump(inst)
         else:
             unimplemented(f"FOR_ITER {typestr(it)}")
@@ -1214,24 +1334,31 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         self.call_function(BuiltinVariable(iter), [args], {})
         #self.output.guards
 
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
 
         #TODO: boh link this to the symbolic shapes
         #TODO: boh in fx/graph.py every node has a num_users variable and in case of the loop bounds being one of them, increase the counter
         if not config.unroll_for_iter:
-            for_name = 'for_' + str(len(self.output.graph.for_loop_instr_stack)) + '_' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
+            for_name = 'for_' + str(len(self.output.graph.for_loop_instr_stack)) + '_' + '{}'.format(self.output.graph.for_loop_cnt)
+            self.output.graph.for_loop_it_cnts[for_name] = -1
+            self.output.graph.for_loop_cnt += 1
             loop_variable_name = ''.join(random.choices(string.ascii_lowercase, k=3))
-            self.output.graph.for_loop_instr_stack.append((for_name, inst))
+            self.output.graph.for_loop_instr_stack.append([for_name])
             self.output.graph.for_loop_instr[for_name] = {'bounds': args.as_proxy(),
-                                                          'ins_nodes' : [],
-                                                          'var_name': None}
+                                                          'ins_nodes' : [[inst]],
+                                                          'var_name': None,
+                                                          'nodes': []}
 
-            self.output.graph.create_node(op="for_loop", target='None',
-                                          args=(loop_variable_name, args.as_proxy().start, [n for n in self.output.graph.nodes][0]),
-                                          kwargs=None,
-                                          name=for_name,
-                                          type_expr=None)
+            #TODO: boh make the correct mapping from the symbolic variable to the actual value of the tensor
+            n = self.output.graph.create_node(op="for_loop", target='for_loop',
+                                              args=(loop_variable_name, args.as_proxy().start, (args.as_proxy().stop, [n for n in self.output.graph.nodes][0]), args.as_proxy().step),
+                                              kwargs=None,
+                                              name=for_name,
+                                              type_expr=None)
+            n.meta['for_loop_name'] = for_name
+
+            self.output.graph.for_loop_instr[for_name]['nodes'].append(n)
 
     @break_graph_if_unsupported(push=1)
     def CALL_FUNCTION(self, inst):
@@ -2143,10 +2270,12 @@ class InstructionTranslator(InstructionTranslatorBase):
             vars = list(code_options["co_varnames"])
             vars.extend(x for x in self.cell_and_freevars() if x not in vars)
 
+            #TODO: boh this might not work in the general case
             #import pdb
             #pdb.set_trace()
             #ref = f_locals['input']
-            #f_locals['t'] = torch.ones(1, device=ref.device) * 4
+            #f_locals['_zero_node'] = torch.zeros(1, device=ref.device)
+            #vars.append('_zero_node')
             self.symbolic_locals = collections.OrderedDict(
                 (
                     k,
@@ -2287,8 +2416,22 @@ class InstructionTranslator(InstructionTranslatorBase):
             f"torchdynamo done tracing {self.f_code.co_name} (RETURN_VALUE)",
         )
         log.debug("RETURN_VALUE triggered compile")
-        import pdb
-        pdb.set_trace()
+        #print([(n.name, n.meta['for_loop_name']  + '-' + n.meta['for_loop_iteration']) for n in self.output.graph.nodes])
+
+        #TODO: boh, the output node is not captured here, as the node for the output is only added during the compile subgraph step
+        if not config.unroll_for_iter:
+            for for_name in self.output.graph.for_loop_instr.keys():
+                for_search_active = False
+                for n in self.output.graph.nodes:
+                    if n.name == (for_name + '_end'):
+                        for_search_active = True
+                        continue
+                    if for_search_active and any([for_name in u.name for u in n.users.keys()]):
+                        import pdb
+                        pdb.set_trace()
+                        print('Node used after loop')
+                        n.meta['for_loop_properties'].append('output')
+
         self.output.compile_subgraph(
             self,
             reason=GraphCompileReason(

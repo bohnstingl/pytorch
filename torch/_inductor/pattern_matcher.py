@@ -1050,6 +1050,17 @@ def stable_topological_sort(graph: torch.fx.Graph):
 
     def check(node):
         waiting_for = [x for x in _args(node) if x not in ready]
+
+        #TODO: boh config is not available here
+        if node in waiting_for:
+            waiting_for_ind = -1
+            for w_ind, w in enumerate(waiting_for):
+                if w == node:
+                    break
+            #import pdb
+            #pdb.set_trace()
+            waiting_for.pop(w_ind)
+
         if waiting_for:
             # revisit this node when next input is ready
             waiting[waiting_for[0]].append(node)
@@ -1063,6 +1074,9 @@ def stable_topological_sort(graph: torch.fx.Graph):
 
     for n in list(graph.nodes):
         check(n)
+
+    #import pdb
+    #pdb.set_trace()
     assert not waiting and len(ready) == len(graph.nodes)
 
 

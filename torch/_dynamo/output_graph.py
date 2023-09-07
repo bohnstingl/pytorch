@@ -740,9 +740,86 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         for block in reversed(tx.block_stack):
             block.exit(tx)
 
-        import pdb
-        pdb.set_trace()
-        print([n for n in self.graph.nodes])
+        #Before cleaning up the graph, remove the for-loop if needed
+        if not config.unroll_for_iter:
+            #import pdb
+            #pdb.set_trace()
+
+            for for_name in self.graph.for_loop_instr.keys():
+                last_iteration = self.graph.for_loop_it_cnts[for_name] - 1
+                source_node = None
+                #for node in reversed(self.graph.for_loop_instr[for_name]['nodes'][:-1]): 
+                for node in self.graph.for_loop_instr[for_name]['nodes'][1:]: 
+                    #import pdb
+                    #pdb.set_trace()
+                    if 'input' in node.meta['for_loop_properties'] and len(node.meta['for_loop_properties'].keys()) > 1:
+                        #These are the nodes that take initial conditions from outside the for-loop and then use it in the first iteration, e.g., input and recurrent
+                        #Find the initial condition
+                        #Create a node just before the beginning of the for-loop
+                        #Use this node in the for-loop of
+                        #e.g. add an identity node only with the 'input' arguments
+                        #give this new_node a 'meta' which contains then the target node variable of the for-loop
+                        #import pdb
+                        #pdb.set_trace()
+                        input_node = node.meta['for_loop_properties']['input']
+                        #zero_node = tx.symbolic_locals['_zero_node']
+                        #zero_node = variables.ConstantVariable(0)
+
+                        if 'recurrent' in node.meta['for_loop_properties']:
+                            target_rec_node = node.meta['for_loop_properties']['recurrent']
+                            while target_rec_node.meta['for_loop_properties']['recurrent'] is not None:
+                                target_rec_node = target_rec_node.meta['for_loop_properties']['recurrent']
+
+                            #import pdb
+                            #pdb.set_trace()
+                            for_loop_start_node = self.graph.for_loop_instr[for_name]['nodes'][0]
+                            for_init_node = self.graph.create_node(op="call_function", target=operator.add,#<place the builtin-add here>,
+                                                                   args=(input_node, 0.),
+                                                                   kwargs=None,
+                                                                   name=target_rec_node.name,
+                                                                   type_expr=None)
+
+                            for_init_node.meta['for_loop_target_node'] = target_rec_node
+                            #for_loop_start_node.update_arg(3, for_init_node)
+                            for_loop_start_node.prepend(for_init_node)
+                            target_rec_node.meta['for_loop_source_node'] = for_init_node
+
+                            #print(self.graph)
+                            #import pdb
+                            #pdb.set_trace()
+                            
+                        else:
+                            print('Node is an input and not a recurrent node, skip creating initialization nodes!')
+
+                    if 'recurrent' in node.meta['for_loop_properties']:
+                        #Link the node inside the for-loop to itself and remove the link to the other nodes (Do it for the last iteration where the output matches already)
+                        node_args = node.args
+                        #import pdb
+                        #pdb.set_trace()
+                        for arg_ind, arg in enumerate(node_args):
+                            if isinstance(arg, fx.Node):
+                                iteration = int(node.meta['for_loop_iteration'])
+                                if iteration == last_iteration and arg.meta['for_loop_name'] == for_name and arg.meta['for_loop_iteration'] == (iteration - 1) and node.meta['for_loop_properties']['recurrent'] is None:
+                                    #import pdb
+                                    #pdb.set_trace()
+                                    node.update_arg(arg_ind, node)
+                            elif isinstance(arg, variables.TupleVariable):
+                                pass
+                            else:
+                                raise Exception('Unknown node type. Don\'t know how to relink the nodes to form recurrency')
+                        
+                #import pdb
+                #pdb.set_trace()
+                for node in reversed(self.graph.for_loop_instr[for_name]['nodes'][1:-1]):
+                    iteration = int(node.meta['for_loop_iteration'])
+                    if iteration != last_iteration:
+                        self.graph.erase_node(node)
+
+        print(self.graph)
+        #import pdb
+        #pdb.set_trace()
+        self.cleanup_graph()
+        #print(self.graph)
 
         self.cleanup_graph()
         tx.prune_dead_locals()
@@ -807,8 +884,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
         else:
             graph_output_var = self.new_var("graph_out")
             print([n for n in self.graph.nodes])
-            import pdb
-            pdb.set_trace()
+            #import pdb
+            #pdb.set_trace()
             pass1 = PyCodegen(tx, root, graph_output_var)
             self.side_effects.codegen_save_tempvars(pass1)
             pass1.foreach(stack_values)
@@ -826,8 +903,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             self.side_effects.codegen_update_mutated(pass2)
 
             print([n for n in self.graph.nodes])
-            import pdb
-            pdb.set_trace()
+            #import pdb
+            #pdb.set_trace()
 
             output = []
             if count_calls(self.graph) != 0 or len(pass2.graph_outputs) != 0:
@@ -934,12 +1011,12 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             "%s", LazyString(lambda: self.get_graph_sizes_log_str(name))
         )
 
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         compiled_fn = self.call_user_compiler(gm)
         compiled_fn = disable(compiled_fn)
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
 
         counters["stats"]["unique_graphs"] += 1
         self.install_global(name, compiled_fn)
@@ -964,8 +1041,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
 
     @dynamo_timed(phase_name="backend_compile")
     def call_user_compiler(self, gm: fx.GraphModule) -> CompiledFn:
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         tot = 0
         placeholders = []
         for node in gm.graph.nodes:
@@ -992,8 +1069,8 @@ class OutputGraph(Checkpointable[OutputGraphState]):
             if config.verify_correctness:
                 compiler_fn = WrapperBackend(compiler_fn)
 
-            import pdb
-            pdb.set_trace()
+            #import pdb
+            #pdb.set_trace()
             compiled_fn = compiler_fn(gm, self.example_inputs())
             _step_logger()(logging.INFO, f"done compiler function {name}")
             assert callable(compiled_fn), "compiler_fn did not return callable"

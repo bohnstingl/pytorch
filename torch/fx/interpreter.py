@@ -78,6 +78,7 @@ class Interpreter:
         self.name = "Interpreter"
         self.garbage_collect_values = garbage_collect_values
         self.extra_traceback = True
+        self.for_loop_vars = {}
 
         if self.garbage_collect_values:
             # Run through reverse nodes and record the first instance of a use
@@ -127,7 +128,10 @@ class Interpreter:
 
         #import pdb
         #pdb.set_trace()
+        not_found = False
         for node in self.module.graph.nodes:
+            #node = self.module.graph._root.next
+            #while True:
             pbar.update(1)
             if node in self.env:
                 # Short circuit if we have this value. This could
@@ -137,7 +141,28 @@ class Interpreter:
                 continue
 
             try:
+                #print(args)
+                #print(node.args)
+                #if len(node.args) > 0:
+                #    print(node.args[0])
+                #    if node.op == 'for_loop':
+                #        node.meta['for_loop_env'] = node.args[0]
+                #print(self)
+                #print(self.module.graph)
+
                 self.env[node] = self.run_node(node)
+                '''if not not_found:
+                    #self.env[node] = self.run_node(node)
+                    ret = self.run_node(node)
+                    #import pdb
+                    #pdb.set_trace()
+                    self.env[node] = ret
+                else:
+                    #import pdb
+                    #pdb.set_trace()
+                    self.env[node] = (None,)
+                if node.op == 'for_loop':
+                    not_found = True'''
             except Exception as e:
                 if self.extra_traceback:
                     msg = f"While executing {node.format_node()}"
@@ -194,10 +219,61 @@ class Interpreter:
         Returns:
             Any: The result of executing ``n``
         """
+        print(n)
+        #import pdb
+        #pdb.set_trace()
         with self._set_current_node(n):
             args, kwargs = self.fetch_args_kwargs_from_env(n)
             assert isinstance(args, tuple)
             assert isinstance(kwargs, dict)
+
+            if n.op == 'for_loop':
+                #self_obj, *args_tail = args
+                if 'for_loop_env' in n.meta:
+                    print(n.meta['for_loop_env'])
+                    print(hasattr(n.meta['for_loop_env'], 'for_loop'))
+                    import pdb
+                    pdb.set_trace()
+                    #print('Operation halted')
+                if hasattr(self, 'for_loop'):
+                    print('Inside different argument')
+                    import pdb
+                    pdb.set_trace()
+                self.for_loop_vars[n.meta['for_loop_name']] = list(args) + [0]
+                #print(self_obj)
+                #print(hasattr(self_obj, target))
+                #return getattr(self_obj, target)(*args_tail, **kwargs)
+                return None
+            elif n.op == 'for_loop_end':
+                #import pdb
+                #pdb.set_trace()
+                self.for_loop_vars[n.meta['for_loop_name']][-1] += self.for_loop_vars[n.meta['for_loop_name']][-2]
+                return None
+            else:
+                new_args = []
+                for arg in args:
+                    if type(arg) == tuple:
+                        #import pdb
+                        #pdb.set_trace()
+                        arg_list = []
+                        for a in arg:
+                            if type(a) == str and self.for_loop_vars[n.meta['for_loop_name']][0] == a:
+                                #arg_list.append(self.for_loop_vars[n.meta['for_loop_name']][1])
+                                arg_list.append(-1)
+                                #arg_list.append(a)
+                                #import pdb
+                                #pdb.set_trace()
+                                #from sympy.core.symbol import Symbol
+                                #arg_list.append(Symbol('t'))
+                                #arg_list.append(torch.ones(3, dtype=torch.long))
+                            else:
+                                arg_list.append(a)
+                        new_args.append(tuple(arg_list))
+                    else:
+                        new_args.append(arg)
+                args = tuple(new_args)
+            #import pdb
+            #pdb.set_trace()
             return getattr(self, n.op)(n.target, args, kwargs)
 
     # Main Node running APIs
@@ -270,6 +346,8 @@ class Interpreter:
         assert not isinstance(target, str)
 
         # Execute the function and return the result
+        #import pdb
+        #pdb.set_trace()
         return target(*args, **kwargs)
 
     @compatibility(is_backward_compatible=True)
@@ -292,6 +370,10 @@ class Interpreter:
 
         # Execute the method and return the result
         assert isinstance(target, str)
+        #import pdb
+        #pdb.set_trace()
+        #print(self_obj)
+        #print(hasattr(self_obj, target))
         return getattr(self_obj, target)(*args_tail, **kwargs)
 
     @compatibility(is_backward_compatible=True)
@@ -314,7 +396,8 @@ class Interpreter:
         # Execute the method and return the result
         assert isinstance(target, str)
         submod = self.fetch_attr(target)
-
+        #import pdb
+        #pdb.set_trace()
         return submod(*args, **kwargs)
 
     @compatibility(is_backward_compatible=True)
@@ -367,7 +450,24 @@ class Interpreter:
         Return:
             Tuple[Tuple, Dict]: ``args`` and ``kwargs`` with concrete values for ``n``.
         """
-        args = self.map_nodes_to_values(n.args, n)
+        #import pdb
+        #pdb.set_trace()
+
+        if 'for_loop_source_node' in n.meta:
+            #import pdb
+            #pdb.set_trace()
+            new_args = []
+            for a in n.args:
+                if a == n:
+                    new_args.append(n.meta['for_loop_source_node'])
+                else:
+                    new_args.append(a)
+            args = tuple(new_args)
+        else:
+            args = n.args
+
+        #args = self.map_nodes_to_values(n.args, n)
+        args = self.map_nodes_to_values(args, n)
         assert isinstance(args, tuple)
         kwargs = self.map_nodes_to_values(n.kwargs, n)
         assert isinstance(kwargs, dict)

@@ -505,8 +505,8 @@ class BuiltinVariable(VariableTracker):
 
                 sym_args = None
                 if isinstance(args[1], TupleVariable) and type(args[1][0].value) == str:
-                    import pdb
-                    pdb.set_trace()
+                    #import pdb
+                    #pdb.set_trace()
                     #sym_val = args[1]
                     sym_args = args
                     options = VariableTracker.propagate(sym_args[1].items)
@@ -514,8 +514,8 @@ class BuiltinVariable(VariableTracker):
                     new_item0 = tx.symbolic_locals[sym_args[1][0].value]
                     new_tuple = TupleVariable([new_item0] + sym_args[1].items[1:], **options)
                     args = [sym_args[0], new_tuple]
-                    import pdb
-                    pdb.set_trace()
+                    #import pdb
+                    #pdb.set_trace()
 
                 #print([n for n in tx.output.graph.nodes])
                 proxy = tx.output.create_proxy(
@@ -524,8 +524,8 @@ class BuiltinVariable(VariableTracker):
                     *proxy_args_kwargs(args, kwargs),
                 )
                 if sym_args is not None:
-                    import pdb
-                    pdb.set_trace()
+                    #import pdb
+                    #pdb.set_trace()
                     n = [n for n in tx.output.graph.nodes][-1]
                     n.sym_args = sym_args
                 #print([n for n in tx.output.graph.nodes])

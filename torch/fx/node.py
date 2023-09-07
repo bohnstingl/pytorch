@@ -195,7 +195,6 @@ class Node:
         self._input_nodes : Dict[Node, None] = {}
         self.__update_args_kwargs(map_arg(args, lambda x: x), map_arg(kwargs, lambda x: x))  # type: ignore[arg-type]
         self.sym_args = sym_args
-        self.part_of_for_loop = part_of_for_loop
 
         # All of the nodes that use the value produced by this Node
         # Note one user may correspond to several uses, e.g. the node fo ``x + x``
