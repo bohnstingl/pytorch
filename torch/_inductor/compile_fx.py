@@ -300,6 +300,9 @@ def compile_fx_inner(
         "layout_opt": layout_opt,
     }
 
+    #import pdb
+    #pdb.set_trace()
+
     compiled_graph: CompiledFxGraph = fx_codegen_and_compile(
         *graph_args, **graph_kwargs
     )
@@ -868,8 +871,10 @@ def compile_fx(
     config_patches: Optional[Dict[str, Any]] = None,
     decompositions: Optional[Dict[OpOverload, Callable]] = None,
 ):
+    #TODO: boh the model_ has the correct python code with the for-loop contained
     #import pdb
     #pdb.set_trace()
+
     """Main entrypoint to a compile given FX graph"""
     if config_patches:
         with config.patch(config_patches):
@@ -911,6 +916,8 @@ def compile_fx(
             recursive_compile_fx,
         )
 
+    #TODO: boh the example inputs has the s0 shape already specified (4) and not as a symbol s0 anymore
+    #The other shapes are symbols such as s1 and s2
     if isinstance(model_, torch.fx.GraphModule):
         if isinstance(model_.graph._codegen, _PyTreeCodeGen):
             # this graph is the result of dynamo.export()
@@ -944,6 +951,8 @@ def compile_fx(
 
     @dynamo_utils.dynamo_timed
     def fw_compiler_base(model: torch.fx.GraphModule, example_inputs, is_inference):
+        import pdb
+        pdb.set_trace()
         if is_inference:
             # partition_fn won't be called
             joint_graph_passes(model)
@@ -998,7 +1007,9 @@ def compile_fx(
                 ]
                 if isinstance(n, torch.fx.Node)
             }
-
+        #[n for n in model.graph.nodes]
+        import pdb
+        pdb.set_trace()
         return inner_compile(
             model,
             example_inputs,
@@ -1029,10 +1040,15 @@ def compile_fx(
         inference_compiler = functools.partial(fw_compiler_base, is_inference=True)
 
     def partition_fn(graph, joint_inputs, **kwargs):
+        #import pdb
+        #pdb.set_trace()
         joint_graph_passes(graph)
-        return min_cut_rematerialization_partition(
+        res = min_cut_rematerialization_partition(
             graph, joint_inputs, **kwargs, compiler="inductor"
         )
+        #import pdb
+        #pdb.set_trace()
+        return res
 
     @dynamo_utils.dynamo_timed
     def bw_compiler(model: torch.fx.GraphModule, example_inputs):

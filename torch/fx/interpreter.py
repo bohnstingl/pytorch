@@ -149,7 +149,11 @@ class Interpreter:
                 #        node.meta['for_loop_env'] = node.args[0]
                 #print(self)
                 #print(self.module.graph)
+                #import pdb
+                #pdb.set_trace()
+                #print(self.new_graph)
 
+                #self.env[node] = [self.run_node(node), node.meta, -1]
                 self.env[node] = self.run_node(node)
                 '''if not not_found:
                     #self.env[node] = self.run_node(node)
@@ -201,7 +205,19 @@ class Interpreter:
         if "from_node" not in node.meta:
             node.meta["from_node"] = []
         if not node.meta["from_node"] or node.meta["from_node"][-1][0] != node.name:
-            node.meta["from_node"].append((node.name, node.target))
+            node.meta["from_node"].append((node.name, node.target, node.meta))
+
+            if 'for_loop_name' in node.meta["from_node"][-1]:
+                #import pdb
+                #pdb.set_trace()
+                self.module.graph.for_loop_instr_stack[node.meta["from_node"][-1]['for_loop_name']] = node
+
+        #Put the additional meta data from the for_loop to the new node
+        #print('Node name in set_current_node: ' + str(node.name))
+        #if (node.name == 'range' or node.name == 'for_0_0'):
+        #    import pdb
+        #    pdb.set_trace()
+        #    node.meta[]
         with fx_traceback.set_current_meta(node.meta):
             yield
 
@@ -219,7 +235,8 @@ class Interpreter:
         Returns:
             Any: The result of executing ``n``
         """
-        print(n)
+        print('Run node in interpreter:')
+        print((n, n.args, n.users))
         #import pdb
         #pdb.set_trace()
         with self._set_current_node(n):
@@ -228,8 +245,10 @@ class Interpreter:
             assert isinstance(kwargs, dict)
 
             if n.op == 'for_loop':
+                #import pdb
+                #pdb.set_trace()
                 #self_obj, *args_tail = args
-                if 'for_loop_env' in n.meta:
+                '''if 'for_loop_env' in n.meta:
                     print(n.meta['for_loop_env'])
                     print(hasattr(n.meta['for_loop_env'], 'for_loop'))
                     import pdb
@@ -238,12 +257,15 @@ class Interpreter:
                 if hasattr(self, 'for_loop'):
                     print('Inside different argument')
                     import pdb
-                    pdb.set_trace()
+                    pdb.set_trace()'''
                 self.for_loop_vars[n.meta['for_loop_name']] = list(args) + [0]
                 #print(self_obj)
                 #print(hasattr(self_obj, target))
                 #return getattr(self_obj, target)(*args_tail, **kwargs)
-                return None
+                #return None
+                #import pdb
+                #pdb.set_trace()
+                return getattr(self, 'call_function')(n.target, (args[1], args[2][1], args[3]), kwargs)
             elif n.op == 'for_loop_end':
                 #import pdb
                 #pdb.set_trace()
@@ -272,8 +294,14 @@ class Interpreter:
                     else:
                         new_args.append(arg)
                 args = tuple(new_args)
+            #if len(args) > 0 and type(args[0]) == Proxy:
+            #    print(n.target)
+            #    print(args)
+            #print(args)
             #import pdb
             #pdb.set_trace()
+            #if type(args) == tuple and len(args) >= 1 and type(args[0]) == list and args[0][-1] == -1:
+            #    args = tuple(args[0][0],)
             return getattr(self, n.op)(n.target, args, kwargs)
 
     # Main Node running APIs
@@ -346,8 +374,17 @@ class Interpreter:
         assert not isinstance(target, str)
 
         # Execute the function and return the result
+        #print(target)
+        #print(args)
+        #print('Herererereeee')
+        #print(self.graph)
         #import pdb
         #pdb.set_trace()
+        #if len(args) > 0 and type(args[0]) == Proxy:
+        #    print(target)
+        #    print(args)
+        #    import pdb
+        #    pdb.set_trace()
         return target(*args, **kwargs)
 
     @compatibility(is_backward_compatible=True)
@@ -454,8 +491,8 @@ class Interpreter:
         #pdb.set_trace()
 
         if 'for_loop_source_node' in n.meta:
-            #import pdb
-            #pdb.set_trace()
+            import pdb
+            pdb.set_trace()
             new_args = []
             for a in n.args:
                 if a == n:

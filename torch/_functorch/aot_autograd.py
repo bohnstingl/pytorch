@@ -1395,6 +1395,8 @@ def create_functionalized_graph(
         # Setup the wrapper for functionalization of rng ops
         helper, args = create_functionalized_rng_ops_wrapper(helper, args, trace_joint)
 
+    #import pdb
+    #pdb.set_trace()
     with enable_python_dispatcher():
         fx_g = make_fx(helper, decomposition_table=aot_config.decompositions)(*args)
 
@@ -1502,6 +1504,8 @@ def aot_dispatch_base_graph(flat_fn, flat_args: List[Tensor], aot_config: AOTCon
     # While cases that it does need to handle include:
     # - input mutations (including when inputs are aliases of each other)
     # - input metadata mutations
+    #import pdb
+    #pdb.set_trace()
     keep_mutations = aot_config.keep_inference_input_mutations
     fn_to_trace = fn_input_mutations_to_outputs(
         flat_fn,
@@ -1534,8 +1538,11 @@ def aot_dispatch_base_graph(flat_fn, flat_args: List[Tensor], aot_config: AOTCon
     return fw_module
 
 def aot_dispatch_base(flat_fn, flat_args: List[Tensor], aot_config: AOTConfig, *, fw_metadata: ViewAndMutationMeta):
+    #import pdb
+    #pdb.set_trace()
     fw_module = aot_dispatch_base_graph(flat_fn, flat_args, aot_config, fw_metadata=fw_metadata)
-
+    #import pdb
+    #pdb.set_trace()
     disable_amp = torch._C._is_any_autocast_enabled()
     context = torch._C._DisableAutocast if disable_amp else nullcontext
 
@@ -2343,6 +2350,8 @@ fw_metadata={str(fw_metadata)}
             f'actual_metadata={pprint.pformat(partial_asdict(fw_metadata_updated))}'
         )
 
+    #import pdb
+    #pdb.set_trace()
     compiled_fn = compiler_fn(wrapped_flat_fn, flat_args_with_synthetic_bases, aot_config, fw_metadata=fw_metadata_updated)
 
     if not hasattr(compiled_fn, "_boxed_call"):
@@ -3165,6 +3174,9 @@ def create_aot_dispatcher_function(
         When aot_config.is_export is False, we return an ordinary runtime function
     """
 
+    #import pdb
+    #pdb.set_trace()
+
     # This is the main entry point.
     # TODO: Chillee argues that dynamo itself should pass in fake tensors to
     # the list of arguments when compiling; at the moment we do not do this
@@ -3291,7 +3303,11 @@ or otherwise set torch._functorch.config.functionalize_rng_ops = False.""")
         compiler_fn = partial(aot_wrapper_dedupe, compiler_fn=compiler_fn)
         # You can put more passes here
 
+        #import pdb
+        #pdb.set_trace()
         compiled_fn = compiler_fn(flat_fn, fake_flat_args, aot_config, fw_metadata=fw_metadata)
+        #import pdb
+        #pdb.set_trace()
         if aot_config.is_export:
 
             mutated_user_inp_locs = [
@@ -3740,6 +3756,8 @@ def aot_module_simplified(
             dynamic_shapes = x.fake_mode.shape_env is not None
             break
 
+    #import pdb
+    #pdb.set_trace()
     aot_config = AOTConfig(
         fw_compiler=fw_compiler,
         bw_compiler=bw_compiler,
@@ -3768,16 +3786,23 @@ def aot_module_simplified(
     # historically returned a function that was not the boxed calling
     # convention.  This should get fixed...
     def forward(*runtime_args):
+        #import pdb
+        #pdb.set_trace()
         full_args = []
         full_args.extend(params_flat)
         full_args.extend(runtime_args)
-        return compiled_fn(full_args)
+        res = compiled_fn(full_args)
+        #import pdb
+        #pdb.set_trace()
+        return res
 
     # Just for convenience
     forward.zero_grad = mod.zero_grad
     forward.named_parameters = mod.named_parameters
     forward.named_buffers = mod.named_buffers
 
+    #import pdb
+    #pdb.set_trace()
     return forward
 
 def aot_export_module(

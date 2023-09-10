@@ -49,10 +49,14 @@ def aot_autograd(**kwargs):
         else:
             patch_config = contextlib.nullcontext()
 
+        #import pdb
+        #pdb.set_trace()
         try:
             # NB: NOT cloned!
             with enable_aot_logging(), patch_config:
                 cg = aot_module_simplified(gm, example_inputs, **kwargs)
+                #import pdb
+                #pdb.set_trace()
                 counters["aot_autograd"]["ok"] += 1
                 return disable(cg)
         except Exception:

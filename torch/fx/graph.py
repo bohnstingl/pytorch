@@ -327,6 +327,9 @@ class CodeGen:
         globals_: Dict[str, Any] = {}
         wrapped_fns: Dict[str, None] = {}
 
+        print('Here 111')
+        print([n for n in nodes])
+
         # Wrap string in list to pass by reference
         maybe_return_annotation : List[str] = ['']
 
@@ -417,6 +420,7 @@ class CodeGen:
                 node_to_last_use[n] = user
                 user_to_last_uses.setdefault(user, []).append(n)
 
+        print('Here 111')
         print([n for n in nodes])
 
         for node in reversed(nodes):
@@ -486,14 +490,6 @@ class CodeGen:
             intendation = '    '*for_loop_cnt
             maybe_type_annotation = '' if node.type is None else f' : {type_repr(node.type)}'
 
-            '''if for_loop_cnt > 0:
-                #In case of a for-loop being active:
-                #1.) If a variable is just used in the first iteration and afterwards not any more, then this variable needs to be overwritten inside the loop.
-                #2.) If a there is a dependency from one loop iteration to the next iteration, then this variable needs to be overwritten inside the loop.
-                #3.) If there is a depency of variables after the loop to inside the loop, then this variable needs to be updated.
-                import pdb
-                pdb.set_trace()'''
-
             if verbose:
                 # override annotation with more detailed information
                 from torch._subclasses.fake_tensor import FakeTensor
@@ -530,8 +526,11 @@ class CodeGen:
                 # pretty print operators
                 if getattr(node.target, "__module__", "") == '_operator' and node.target.__name__ in magic_methods:
                     assert isinstance(node.args, tuple)
-                    if node.sym_args is not None:
-                        #TODO: boh This does not work in general
+                    print(node)
+                    #import pdb
+                    #pdb.set_trace()
+                    if 'for_loop_dependent_arg' in node.meta and len(node.meta['for_loop_dependent_arg']) > 0:
+                        #TODO: boh check whether this works in the general case
                         
                         #new_item0 = tx.symbolic_locals[sym_args[1][0].value]
                         #import pdb
@@ -542,9 +541,36 @@ class CodeGen:
                         #from torch._dynamo.variables.lists import TupleVariable
                         #new_tuple = TupleVariable([node.args[1][0]] + list(node.args[1])[1:], **options)
                         #node.original_args = cpy
-                        node.args = (node.args[0], tuple([node.sym_args[1].items[0].value, node.args[1][1]]))
+                        #node.args = (node.args[0], tuple([node.sym_args[1].items[0].value, node.args[1][1]]))
+                        #arg_ind = 0#node.meta['for_loop_dependent_arg'][0]
+                        #arg_list = []
+                        
+                        def work_through_args(arg_list_to_inspect, arg_ind):
+                            tmp_arg_list = []
+                            #import pdb
+                            #pdb.set_trace()
+                            args_to_copy_pre = list(arg_list_to_inspect)[:node.meta['for_loop_dependent_arg'][arg_ind]]
+                            args_to_copy_post = list(arg_list_to_inspect)[(node.meta['for_loop_dependent_arg'][arg_ind])+1:]
+                            arg_list_to_inspect = list(arg_list_to_inspect)[node.meta['for_loop_dependent_arg'][arg_ind]]
+                            
+                            tmp_arg_list.extend(args_to_copy_pre)
+                            if arg_ind < (len(node.meta['for_loop_dependent_arg'])-1):
+                                tmp_arg_list.append(tuple(work_through_args(arg_list_to_inspect, arg_ind+1)))
+                            elif arg_ind == (len(node.meta['for_loop_dependent_arg'])-1):
+                                tmp_arg_list.extend([node.meta['for_loop_variable']])
+                            tmp_arg_list.extend(args_to_copy_post)
+                            return tmp_arg_list
+
+                        #import pdb
+                        #pdb.set_trace()
+
+                        arg_list = tuple(work_through_args(node.args, 0))
+
+                        #import pdb
+                        #pdb.set_trace()
+                        
                         body.append(intendation + f'{repr(node)}{maybe_type_annotation} = '
-                                f'{magic_methods[node.target.__name__].format(*(repr(a) for a in node.args))}')
+                                f'{magic_methods[node.target.__name__].format(*(repr(a) for a in arg_list))}')
                         body[-1] = body[-1].replace('\'', '')
                     else:
                         body.append(intendation + f'{repr(node)}{maybe_type_annotation} = '
@@ -592,6 +618,7 @@ class CodeGen:
                 body.append(intendation + self.generate_output(node.args[0]))
                 return
             elif node.op == 'for_loop':
+                print(node.meta)
                 #import pdb
                 #pdb.set_trace()
                 #if not config.unroll_for_iter:
@@ -919,15 +946,23 @@ class Graph:
             The newly-created and inserted node.
         """
         
-        #print(op, name)
+        #print('Node name ' + str(name))
+        #TODO: boh this does not generalize!!
+        #if name == 'range':
+        #    self.for_loop_instr_stack['dummy_range'] = ''
+        #    print(self.for_loop_instr_stack)
+        #    import pdb
+        #    pdb.set_trace()
+
+        #print(op, name, args)
         #import pdb
         #pdb.set_trace()
-        '''#print((op, args))
-        if op == 'output':
+        #print((op, args))
+        '''if 'call' in op:
             import pdb
             pdb.set_trace()
-            print('Output node added!')
-        '''
+            print('Output node added!')'''
+        
         assert op in ('call_function', 'call_method', 'get_attr', 'call_module', 'placeholder', 'output', 'for_loop', 'for_loop_end')
         args = () if args is None else args
         kwargs = {} if kwargs is None else kwargs
@@ -950,16 +985,23 @@ class Graph:
                 for_name = ''
                 loop_iteration = -1
 
-        n = Node(self, name, op, target, args, kwargs, type_expr, part_of_for_loop=for_name+str(loop_iteration))
+        n = Node(self, name, op, target, args, kwargs, type_expr)
 
         if len(self.for_loop_instr_stack) > 0 and for_name != '':
+            #import pdb
+            #pdb.set_trace()
             n.meta['for_loop_name'] = for_name
             n.meta['for_loop_iteration'] = loop_iteration
             n.meta['for_loop_properties'] = {}
+            n.meta['for_loop_variable'] = self.for_loop_instr[for_name]['nodes'][0].meta['for_loop_variable']
+
+            #Set the new node to be a user of the for_loop
+            self.for_loop_instr[for_name]['nodes'][0].users[n] = ''
 
             self.for_loop_instr[for_name]['nodes'].append(n)
-            '''#import pdb
+            #import pdb
             #pdb.set_trace()
+            '''
             for_name = self.for_loop_instr_stack[-1][0]
             if len(self.for_loop_instr[for_name]['ins_nodes']) > 0:
                 self.for_loop_instr[for_name]['ins_nodes'][-1] = [self.for_loop_instr[for_name]['ins_nodes'][-1][0], n]
@@ -969,6 +1011,15 @@ class Graph:
                 pdb.set_trace()
                 exit()
             '''
+
+        if name == 'range':
+            for_name = 'dummy_range'
+            self.for_loop_instr_stack[for_name] = ''
+            loop_iteration = 0
+            self.for_loop_it_cnts[for_name] = loop_iteration
+            print(self.for_loop_instr_stack)
+            import pdb
+            pdb.set_trace()
 
         self._graph_namespace.associate_name_with_obj(name, n)
 
@@ -1478,7 +1529,7 @@ class Graph:
         # Check targets are legit
         if self.owning_module:
             for node in self.nodes:
-                if node.op == 'call_function':
+                if node.op == 'call_function' or node.op == 'for_loop':
                     if not callable(node.target):
                         raise ValueError(f'Node {node} target {node.target} has type {torch.typename(node.target)} but '
                                          'a Callable is expected')
@@ -1546,6 +1597,10 @@ class Graph:
             to call unless you know that your FX graph consists entirely
             of functional operations.
         """
+        print([n for n in self.nodes])
+        #import pdb
+        #pdb.set_trace()
+
         # Lint the graph first to make sure its topologically sorted, otherwise
         # DCE below will not behave as expected.
         self.lint()
@@ -1555,9 +1610,18 @@ class Graph:
         # the removed node.
         changed = False
         for node in reversed(self.nodes):
+            #print(node)
+            #import pdb
+            #pdb.set_trace()
             if not node.is_impure() and len(node.users) == 0:
+                #import pdb
+                #pdb.set_trace()
                 self.erase_node(node)
                 changed = True
+
+        print([n for n in self.nodes])
+        #import pdb
+        #pdb.set_trace()
 
         return changed
 

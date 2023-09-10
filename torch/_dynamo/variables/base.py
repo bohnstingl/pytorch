@@ -333,7 +333,8 @@ class VariableTracker(metaclass=HasPostInit):
         guards: Optional[Set] = None,
         source: Source = None,
         mutable_local: MutableLocal = None,
-        recursively_contains: Optional[Set] = None
+        recursively_contains: Optional[Set] = None,
+        sym_var_name: Optional = None
     ):
         super().__init__()
         self.guards = guards or set()
@@ -342,6 +343,7 @@ class VariableTracker(metaclass=HasPostInit):
         self.recursively_contains = (
             recursively_contains  # provides hint to replace_all when replacing vars
         )
+        self.sym_var_name = None
 
     def __post_init__(self, *args, **kwargs):
         if self.recursively_contains is None:

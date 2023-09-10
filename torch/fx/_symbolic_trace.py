@@ -320,6 +320,10 @@ class Tracer(TracerBase):
 
             The value ``a`` converted into the appropriate ``Argument``
         """
+        #TODO: boh this ignores the nodes for_loop and does only do the single body
+        #print(a)
+        #import pdb
+        #pdb.set_trace()
         # The base tracer is used to construct Graphs when there is no associated
         # module hierarchy, so it can never create parameter references.
         # The default tracer adds the ability to refer to parameters when
@@ -340,6 +344,8 @@ class Tracer(TracerBase):
         # For NamedTuple instances that appear literally as args, we emit
         # a node to construct the NamedTuple and use that Node as the argument.
         if isinstance(a, tuple) and hasattr(a, "_fields"):
+            #import pdb
+            #pdb.set_trace()
             args = tuple(self.create_arg(elem) for elem in a)
             return self.create_node("call_function", a.__class__, args, {})
 
@@ -721,6 +727,9 @@ class Tracer(TracerBase):
 
             A ``Graph`` representing the semantics of the passed-in ``root``.
         """
+        #TODO: boh this function here create the smaller graph without the for_loop
+        #import pdb
+        #pdb.set_trace()
         global _is_fx_tracing_flag
         old_is_fx_tracing_flag = _is_fx_tracing_flag
         _is_fx_tracing_flag = True
@@ -741,6 +750,8 @@ class Tracer(TracerBase):
 
             tracer_cls: Optional[Type[Tracer]] = getattr(self, "__class__", None)
             self.graph = Graph(tracer_cls=tracer_cls)
+            #import pdb
+            #pdb.set_trace()
             if hasattr(fn, '__code__'):
                 code = fn.__code__
                 self.graph._co_fields = {
@@ -766,6 +777,10 @@ class Tracer(TracerBase):
 
             assert isinstance(fn, FunctionType)
 
+            #print('Here')
+            print(self.graph)
+            #import pdb
+            #pdb.set_trace()
             fn_globals = fn.__globals__  # run before it gets patched
             fn, args = self.create_args_for_root(
                 fn, isinstance(root, torch.nn.Module), concrete_args
@@ -775,6 +790,8 @@ class Tracer(TracerBase):
                 str, Proxy
             ] = {}  # Reduce number of get_attr calls
 
+            #import pdb
+            #pdb.set_trace()
             # Method dispatch on parameters is not recorded unless it's directly used.
             # Thus, we need to insert a proxy when __getattr__ requests a parameter.
             @functools.wraps(_orig_module_getattr)
@@ -811,6 +828,11 @@ class Tracer(TracerBase):
                     _autowrap_check(
                         patcher, module.__dict__, self._autowrap_function_ids
                     )
+
+                #print('Here2')
+                #print(self.graph)
+                #import pdb
+                #pdb.set_trace()
                 self.create_node(
                     "output",
                     "output",
@@ -818,6 +840,9 @@ class Tracer(TracerBase):
                     {},
                     type_expr=fn.__annotations__.get("return", None),
                 )
+                print(self.graph)
+                #import pdb
+                #pdb.set_trace()
 
             self.submodule_paths = None
         finally:

@@ -462,6 +462,7 @@ class KernelArgs:
         return name
 
     def size(self, name):
+        print('Name in common: ' + str(name))
         import pdb
         pdb.set_trace()
         if str(name) == "seed":

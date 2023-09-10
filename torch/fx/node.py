@@ -145,8 +145,6 @@ class Node:
     @compatibility(is_backward_compatible=True)
     def __init__(self, graph: 'Graph', name: str, op: str, target: 'Target',
                  args: Tuple['Argument', ...], kwargs: Dict[str, 'Argument'],
-                 sym_args: Optional[Tuple] = None,
-                 part_of_for_loop: Optional[str] = None,
                  return_type : Optional[Any] = None) -> None:
         """
         Instantiate an instance of ``Node``. Note: most often, you want to use the
@@ -178,7 +176,7 @@ class Node:
         self.name = name  # unique name of value being created
         assert op in ['placeholder', 'call_method', 'call_module', 'call_function', 'get_attr', 'output', 'for_loop', 'for_loop_end', 'root']
         self.op = op  # the kind of operation = placeholder|call_method|call_module|call_function|get_attr
-        if op == 'call_function':
+        if op == 'call_function' or op == 'for_loop':
             if not callable(target):
                 raise ValueError(f'Node [graph = {graph}, name = \'{name}\'] target {target} has type {torch.typename(target)} '
                                  'but a Callable is expected')
@@ -194,7 +192,6 @@ class Node:
         # should not be accessed directly.
         self._input_nodes : Dict[Node, None] = {}
         self.__update_args_kwargs(map_arg(args, lambda x: x), map_arg(kwargs, lambda x: x))  # type: ignore[arg-type]
-        self.sym_args = sym_args
 
         # All of the nodes that use the value produced by this Node
         # Note one user may correspond to several uses, e.g. the node fo ``x + x``
@@ -554,6 +551,11 @@ class Node:
             bool: If the op is impure or not.
         """
         if self.op in {"placeholder", "output"}:
+            return True
+
+        #For-loop node is impure so that it doesn't get erased from the graph
+        #TODO: boh this is a hack
+        if self.op == 'for_loop' or 'from_node' in self.meta and 'for' in self.meta['from_node'][0][0]:
             return True
 
         # Check if an impure function.

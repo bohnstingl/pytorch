@@ -1298,8 +1298,8 @@ class TritonKernel(Kernel):
         else:
             other = ""
 
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         append_broadcast = None
         if V.graph.is_unspec_arg(name):
             line = var
@@ -1607,8 +1607,8 @@ class TritonKernel(Kernel):
 
         print(self.loads._lines)
         print(self.compute._lines)
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
 
         if self.inside_reduction and not self.persistent_reduction:
             self.body.writeline("for roffset in range(0, rnumel, RBLOCK):")
@@ -2320,6 +2320,7 @@ class TritonScheduling:
             pdb.set_trace()
             src_code = "\nimport triton\nimport triton.language as tl\nfrom torch._inductor.ir import ReductionHint\nfrom torch._inductor.ir import TileHint\nfrom torch._inductor.triton_heuristics import AutotuneHint, pointwise\nfrom torch._inductor.utils import instance_descriptor\nfrom torch._inductor import triton_helpers\n\n@pointwise(size_hints=[16384], filename=__file__, meta={'signature': {0: '*fp32', 1: '*fp32', 2: 'i32', 3: 'i32', 4: 'i32'}, 'device': 0, 'constants': {}, 'mutated_arg_names': [], 'autotune_hints': set(), 'configs': [instance_descriptor(divisible_by_16=(0, 1), equal_to_1=())]})\n@triton.jit\ndef KERNEL_NAME(in_ptr0, out_ptr0, ks0, ks1, xnumel, XBLOCK : tl.constexpr):\n    xoffset = tl.program_id(0) * XBLOCK\n    xindex = xoffset + tl.arange(0, XBLOCK)[:]\n    xmask = xindex < xnumel\n    x0 = xindex\n    tmp0 = tl.load(in_ptr0 + (x0 + (0 * ks0 * ks1)), xmask)\n    for i in range(0, 4):\n        tmp0 = tmp0 + tl.load(in_ptr0 + (x0 + (i*ks0*ks1)), xmask)\n    tl.store(out_ptr0 + (x0), tmp0, xmask)\n"
 
+        print('src_code in triton: ' + str(src_code))
         kernel_name = self.define_kernel(src_code, node_schedule)
         self.codegen_comment(node_schedule)
         import pdb
@@ -2350,6 +2351,8 @@ class TritonScheduling:
                     V.graph.wrapper_code.writeline(
                         f"run_intermediate_hooks({origin_node.name!r}, {name})"
                     )
+        #import pdb
+        #pdb.set_trace()
 
         self.scheduler.free_buffers()
 
@@ -2357,9 +2360,6 @@ class TritonScheduling:
         def current_reduction_nodes(nodes):
             return itertools.takewhile(lambda n: n is not DisableReduction, nodes)
 
-        #TODO: boh here is the place probably to change the code if there are multiple code buffers due to values being stored in a list
-        #import pdb
-        #pdb.set_trace()
         with kernel:
             stack = contextlib.ExitStack()
             kernel.set_last_usage(current_reduction_nodes(node_schedule))
@@ -2413,6 +2413,8 @@ class TritonScheduling:
             metadata_comment = f"# kernel path: {kernel_path}"
             origins, detailed_origins = get_kernel_metadata(node_schedule, wrapper)
             metadata_comment += "\n" + origins + "\n" + detailed_origins
+            #import pdb
+            #pdb.set_trace()
             wrapper.define_kernel(
                 kernel_name, compile_wrapper.getvalue(), metadata_comment
             )

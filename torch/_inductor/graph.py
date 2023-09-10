@@ -426,8 +426,8 @@ class GraphLowering(torch.fx.Interpreter):
         log.debug("Set cpp_wrapper to False due to %s", cond)
 
     def register_buffer(self, buffer: ir.ComputedBuffer):
-        #import pdb
-        #pdb.set_trace()
+        import pdb
+        pdb.set_trace()
         name = f"buf{len(self.buffers)}"
         self.buffers.append(buffer)
         self.name_to_buffer[name] = buffer
@@ -651,8 +651,9 @@ class GraphLowering(torch.fx.Interpreter):
             buf.decide_layout()
 
     def run_node(self, n: torch.fx.Node):
-        #import pdb
-        #pdb.set_trace()
+        print('Run node in _inductor: ' + str(n) + ', meta: ' + str(n.meta))
+        import pdb
+        pdb.set_trace()
         origins = {n}
         if n.op == "call_function":
             args, kwargs = self.fetch_args_kwargs_from_env(n)
@@ -858,12 +859,15 @@ class GraphLowering(torch.fx.Interpreter):
 
         self.init_wrapper_code()
 
+        import pdb
+        pdb.set_trace()
         self.scheduler = Scheduler(self.buffers)
         assert self.scheduler is not None  # mypy can't figure this out
         self.scheduler.codegen()
         assert self.wrapper_code is not None
         import pdb
         pdb.set_trace()
+        print('Generate the entire triton file with all the calls and kernels')
         return self.wrapper_code.generate()
 
     def count_bytes(self):

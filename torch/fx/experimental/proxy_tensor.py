@@ -465,9 +465,15 @@ def dispatch_trace(
         tracer: Tracer,
         concrete_args: Optional[Tuple[Any, ...]] = None,
 ) -> GraphModule:
+    #import pdb
+    #pdb.set_trace()
     graph = tracer.trace(root, concrete_args)
     name = root.__class__.__name__ if isinstance(root, torch.nn.Module) else root.__name__
     return GraphModule(tracer.root, graph, name)
+    #res = GraphModule(tracer.root, graph, name)
+    #import pdb
+    #pdb.set_trace()
+    #return res
 
 
 def wrap_key(f, tensors, tracer, pre_dispatch: bool):
@@ -720,6 +726,8 @@ def make_fx(f,
 
     @functools.wraps(f)
     def wrapped(*args):
+        #import pdb
+        #pdb.set_trace()
         phs = pytree.tree_map(lambda _: fx.PH, args)  # type: ignore[attr-defined]
         fx_tracer = PythonKeyTracer()
         fake_tensor_mode: Any = nullcontext()
@@ -806,6 +814,8 @@ def make_fx(f,
         # thus irrelevant to any external functional trace.
         with decompose(decomposition_table), fake_tensor_mode, python_dispatcher_mode, pre_dispatch_mode, proxy_function_mode, \
              sym_mode, proxy_mode, disable_autocast_cache(), disable_proxy_modes_tracing(enable_current=True):
+            #import pdb
+            #pdb.set_trace()
             t = dispatch_trace(wrap_key(func, args, fx_tracer, pre_dispatch), tracer=fx_tracer, concrete_args=tuple(phs))
 
         # TODO: kind of a bad way to do it, should maybe figure out a better way

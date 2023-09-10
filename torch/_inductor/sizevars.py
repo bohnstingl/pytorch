@@ -570,8 +570,8 @@ class SimplifyIndexing(V.WrapperHandler):  # type: ignore[name-defined]
 
     def load(self, name: str, index: sympy.Expr):
         print(index)
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         return self._inner.load(name, self._simplify(index))
 
     def store(self, name, index, value, mode=None):

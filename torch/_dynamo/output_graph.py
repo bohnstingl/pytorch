@@ -780,7 +780,10 @@ class OutputGraph(Checkpointable[OutputGraphState]):
                                                                    type_expr=None)
 
                             for_init_node.meta['for_loop_target_node'] = target_rec_node
+                            for_init_node.users[for_loop_start_node] = None
                             #for_loop_start_node.update_arg(3, for_init_node)
+                            #import pdb
+                            #pdb.set_trace()
                             for_loop_start_node.prepend(for_init_node)
                             target_rec_node.meta['for_loop_source_node'] = for_init_node
 

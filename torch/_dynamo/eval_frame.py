@@ -262,6 +262,8 @@ class _TorchDynamoContext:
             assert not hasattr(new_mod, "get_compiler_config")
             new_mod.get_compiler_config = get_compiler_config  # type: ignore[attr-defined]
 
+            #import pdb
+            #pdb.set_trace()
             return new_mod
         assert callable(fn)
 
@@ -295,6 +297,8 @@ class _TorchDynamoContext:
                         "a dynamo-optimized function. This is not supported at the moment."
                     )
                 else:
+                    #import pdb
+                    #pdb.set_trace()
                     return fn(*args, **kwargs)
 
             on_enter()
@@ -304,6 +308,8 @@ class _TorchDynamoContext:
             dynamic_ctx = enable_dynamic(self.dynamic, self.export)
             dynamic_ctx.__enter__()
             try:
+                #import pdb
+                #pdb.set_trace()
                 return fn(*args, **kwargs)
             finally:
                 set_eval_frame(prior)
@@ -364,6 +370,8 @@ class _TorchDynamoContext:
                 )
             always_optimize_code_objects[fn.__code__] = True
 
+        #import pdb
+        #pdb.set_trace()
         return _fn
 
 

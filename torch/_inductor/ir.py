@@ -4453,8 +4453,8 @@ class InterpreterShim(torch.fx.Interpreter):
         super().__init__(self._dummy_gm(), garbage_collect_values=False)
         self.module = self
         print(graph)
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         self.graph = graph
         self.submodules = submodules
         self.extra_traceback = False
@@ -4463,8 +4463,8 @@ class InterpreterShim(torch.fx.Interpreter):
 
     def run_node(self, n: torch.fx.Node) -> Any:
         self.current_node = n
-        import pdb
-        pdb.set_trace()
+        #import pdb
+        #pdb.set_trace()
         print((n.op, n.args))
         return super().run_node(n)
 
