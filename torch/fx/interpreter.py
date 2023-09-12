@@ -207,10 +207,26 @@ class Interpreter:
         if not node.meta["from_node"] or node.meta["from_node"][-1][0] != node.name:
             node.meta["from_node"].append((node.name, node.target, node.meta))
 
-            if 'for_loop_name' in node.meta["from_node"][-1]:
+            #print(node.op, node.name)
+            #print(node.meta)
+            #node.meta.update(node.meta)
+            if 'for_loop_name' in node.meta["from_node"][-1][-1] and node.op == 'for_loop':
+                print('Found a node with the for_loop')
+
+                for_name = node.meta["from_node"][-1][-1]['for_loop_name']
+                self.module.graph.for_loop_instr_stack.append([for_name])
+                self.module.graph.for_loop_instr[for_name] = {'bounds': node.args,
+                                                             'ins_nodes' : [],
+                                                             'var_name': None,
+                                                             'nodes': [node]}
+                #self.module.graph.for_loop_instr_stack[] = node
+            elif 'for_loop_name' in node.meta["from_node"][-1][-1] and node.op == 'for_loop_end':
+                print('Found a node with the for_loop_end')
                 #import pdb
                 #pdb.set_trace()
-                self.module.graph.for_loop_instr_stack[node.meta["from_node"][-1]['for_loop_name']] = node
+                for_name = node.meta["from_node"][-1][-1]['for_loop_name']
+                self.module.graph.for_loop_instr_stack.pop()
+                #del self.module.graph.for_loop_instr[for_name]
 
         #Put the additional meta data from the for_loop to the new node
         #print('Node name in set_current_node: ' + str(node.name))
@@ -235,11 +251,13 @@ class Interpreter:
         Returns:
             Any: The result of executing ``n``
         """
-        print('Run node in interpreter:')
-        print((n, n.args, n.users))
+        
         #import pdb
         #pdb.set_trace()
         with self._set_current_node(n):
+            print('Run node in interpreter:')
+            print((n, n.args, n.users))
+            #print(self.module.graph)
             args, kwargs = self.fetch_args_kwargs_from_env(n)
             assert isinstance(args, tuple)
             assert isinstance(kwargs, dict)
@@ -265,7 +283,9 @@ class Interpreter:
                 #return None
                 #import pdb
                 #pdb.set_trace()
-                return getattr(self, 'call_function')(n.target, (args[1], args[2][1], args[3]), kwargs)
+                return getattr(self, n.op)(n.target, (args[1], args[2][1], args[3]), kwargs)
+                #return getattr(self, 'call_function')(n.target, (args[1], args[2][1], args[3]), kwargs)
+                #return getattr(self, 'placeholder')('for_loop', (args[0], args[1], args[2][1], args[3]), kwargs)
             elif n.op == 'for_loop_end':
                 #import pdb
                 #pdb.set_trace()
@@ -323,11 +343,17 @@ class Interpreter:
         Returns:
             Any: The argument value that was retrieved.
         """
+        #import pdb
+        #pdb.set_trace()
         assert isinstance(target, str)
         if target.startswith('*'):
             # For a starred parameter e.g. `*args`, retrieve all
             # remaining values from the args list.
             return list(self.args_iter)
+        elif target == 'for_loop':
+            import pdb
+            pdb.set_trace()
+            return args
         else:
             try:
                 return next(self.args_iter)
@@ -355,6 +381,28 @@ class Interpreter:
         """
         assert isinstance(target, str)
         return self.fetch_attr(target)
+
+    @compatibility(is_backward_compatible=True)
+    def for_loop(self, target : 'Target', args : Tuple[Argument, ...], kwargs : Dict[str, Any]) -> Any:
+        """
+        Execute a ``call_function`` node and return the result.
+
+        Args:
+            target (Target): The call target for this node. See
+                `Node <https://pytorch.org/docs/master/fx.html#torch.fx.Node>`__ for
+                details on semantics
+            args (Tuple): Tuple of positional args for this invocation
+            kwargs (Dict): Dict of keyword arguments for this invocation
+
+        Return
+            Any: The value returned by the function invocation
+        """
+        assert not isinstance(target, str)
+
+        #import pdb
+        #pdb.set_trace()
+        return target(*args, **kwargs)
+        #return ''
 
     @compatibility(is_backward_compatible=True)
     def call_function(self, target : 'Target', args : Tuple[Argument, ...], kwargs : Dict[str, Any]) -> Any:
@@ -491,8 +539,8 @@ class Interpreter:
         #pdb.set_trace()
 
         if 'for_loop_source_node' in n.meta:
-            import pdb
-            pdb.set_trace()
+            #import pdb
+            #pdb.set_trace()
             new_args = []
             for a in n.args:
                 if a == n:

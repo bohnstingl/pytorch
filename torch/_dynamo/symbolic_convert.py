@@ -1304,7 +1304,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
                                     #Propagate loop_dep_variable to same node in the next iterations
                                     #import pdb
                                     #pdb.set_trace()
-                                    for start_iter in range(n.meta['for_loop_iteration'], self.output.graph.for_loop_instr[for_name]['nodes'][0].args[2][0]-1):
+                                    for start_iter in range(n.meta['for_loop_iteration'], self.output.graph.for_loop_instr[for_name]['nodes'][0].args[3][0]-1):
                                         n_next = n.next
                                         while n_next.meta['for_loop_iteration'] != (start_iter + 1):
                                             n_next = n_next.next
@@ -1335,6 +1335,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
                     n.meta['for_loop_name'] = for_name
 
                     self.output.graph.for_loop_instr_stack.pop()
+                    #del self.output.graph.for_loop_instr[for_name]
 
                 self.jump(inst)
         else:
@@ -1408,11 +1409,6 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
 
         #Extract the loop bounds
         args = self.pop()
-        self.call_function(BuiltinVariable(iter), [args], {})
-        #self.output.guards
-
-        #import pdb
-        #pdb.set_trace()
 
         #TODO: boh link this to the symbolic shapes
         #TODO: boh in fx/graph.py every node has a num_users variable and in case of the loop bounds being one of them, increase the counter
@@ -1432,15 +1428,59 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
                                                           'nodes': []}
 
             #TODO: boh make the correct mapping from the symbolic variable to the actual value of the tensor
-            n = self.output.graph.create_node(op="for_loop", target=torch.range,
-                                              args=(loop_variable_name, args.as_proxy().start, (args.as_proxy().stop, [n for n in self.output.graph.nodes][0]), args.as_proxy().step),
+            #import operator
+            sym_start = None
+            sym_stop = None
+            sym_step = None
+            sym_var_names = args.sym_var_name
+            if len(sym_var_names) == 1:
+                (sym_stop,) = sym_var_names
+            elif len(sym_var_names) == 2:
+                sym_start, sym_stop = sym_var_names
+            elif len(sym_var_names) == 3:
+                sym_start, sym_stop, sym_step = sym_var_names
+            else:
+                raise AssertionError()
+
+            #import pdb
+            #pdb.set_trace()
+
+            n = self.output.graph.create_node(op="for_loop", target=BuiltinVariable.call_for_loop, #lambda args, kwargs: self.push(BuiltinVariable(iter).call_function(self, args, kwargs)),#torch.range,
+                                              args=(self, loop_variable_name, (args.as_proxy().start, sym_start), (args.as_proxy().stop, sym_stop), (args.as_proxy().step, sym_step)),
                                               kwargs=None,
                                               name=for_name,
                                               type_expr=None)
             n.meta['for_loop_name'] = for_name
             n.meta['for_loop_variable'] = loop_variable_name
-
             self.output.graph.for_loop_instr[for_name]['nodes'].append(n)
+
+            #import pdb
+            #pdb.set_trace()
+            for el in [sym_start, sym_stop, sym_step]:
+                if el is not None:
+                    if type(el) == torch.fx.node.Node:
+                        el.users[n] = ''
+                    else:
+                        for node in self.output.graph.nodes:
+                            if node.name == el:
+                                node.users[n] = ''
+
+
+            #import pdb
+            #pdb.set_trace()
+            #ret = BuiltinVariable(iter).call_function(self, [ConstantVariable(n.args[1]) if type(n.args[1]) == int else n.args[1], n.args[2][1], ConstantVariable(n.args[3]) if type(n.args[3]) == int else n.args[3]], n.kwargs)
+            #self.push(ret)
+            #Access to the guards of the output graph
+            #args.var_getattr(self, 'stop').sym_var_name
+            
+            #import pdb
+            #pdb.set_trace()
+            #self.call_function(BuiltinVariable(iter), [n.args[2][0], n.args[3][0], n.args[4][0]], {})
+            self.call_function(BuiltinVariable(iter), [args], {})
+
+        else:
+            self.call_function(BuiltinVariable(iter), [args], {})
+            #self.output.guards
 
     @break_graph_if_unsupported(push=1)
     def CALL_FUNCTION(self, inst):
@@ -2041,9 +2081,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
     def CALL(self, inst):
         # see https://docs.python.org/3.11/library/dis.html#opcode-CALL
         # for convention
-        #This introduces the guard of the constant shape of the time dimension
-        #import pdb
-        #pdb.set_trace()
+        len_g_prior_call = len(self.output.shape_env.guards)
+
         contents = self.popn(inst.arg + 2)
         if isinstance(contents[0], NullVariable):
             fn = contents[1]
@@ -2060,10 +2099,36 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
         else:
             args = args + contents[2:]
             kwargs = {}
+
         #import pdb
         #pdb.set_trace()
+        if hasattr(fn, 'fn') and fn.fn == range and not config.unroll_for_iter:
+            for_loop_vars = [str(a.sym_num) if hasattr(a, 'sym_num') else None for a in args]    #This returns the actual symbolic variable, e.g., s0
+            for_loop_vars_node = [a.proxy.node if hasattr(a, 'sym_num') else None for a in args]       #This returns the node that is used in the graph, e.g., the getitem
+
         self.call_function(fn, args, kwargs)
         self.kw_names = None
+
+        #import pdb
+        #pdb.set_trace()
+        #If a sym variable is used in the range and there is a guard placed for it, remove it
+        if hasattr(fn, 'fn') and fn.fn == range and not config.unroll_for_iter:
+            range_var = self.pop()
+            range_var.sym_var_name = for_loop_vars_node
+            self.push(range_var)
+
+            #for_loop_vars = [a.evaluate_expr() for a in args]
+            remove_guards = []
+            for g_ind, g in enumerate(self.output.shape_env.guards):
+                for a in for_loop_vars:
+                    if a == str(g.expr.lhs) or a == str(g.expr.rhs):
+                        remove_guards.append(g_ind)
+                        break
+            
+            for g_ind in reversed(remove_guards):
+                if g_ind > (len_g_prior_call-1):
+                    print('Removing guard: ' + str(self.output.shape_env.guards[g_ind]))
+                    del self.output.shape_env.guards[g_ind]
 
     def COPY(self, inst):
         self.push(self.stack[-inst.arg])

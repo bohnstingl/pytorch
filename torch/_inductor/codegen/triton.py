@@ -420,8 +420,8 @@ class TritonOverrides(OpOverrides):
 
     @staticmethod
     def sigmoid(x):
-        #import pdb
-        #pdb.set_trace()
+        import pdb
+        pdb.set_trace()
         return f"tl.sigmoid({x})"
 
     @staticmethod
@@ -1607,8 +1607,8 @@ class TritonKernel(Kernel):
 
         print(self.loads._lines)
         print(self.compute._lines)
-        #import pdb
-        #pdb.set_trace()
+        import pdb
+        pdb.set_trace()
 
         if self.inside_reduction and not self.persistent_reduction:
             self.body.writeline("for roffset in range(0, rnumel, RBLOCK):")

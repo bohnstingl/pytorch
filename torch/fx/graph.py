@@ -484,6 +484,7 @@ class CodeGen:
             return f"[{', '.join(str(x) for x in shape)}]"
 
         def emit_node(node : Node, for_loop_cnt: int):
+            print(node)
             #import pdb
             #pdb.set_trace()
 
@@ -625,7 +626,7 @@ class CodeGen:
                 #Add intentation level
                 for_name = node.name
                 #self.for_loop_instr[for_name]['var_name']
-                body.append(intendation + f'for {node.args[0]} in range({node.args[1]}, {node.args[2][1]}):')
+                body.append(intendation + f'for {node.args[1]} in range({node.args[2][0]}, {node.args[3][1]}):')
                 return
             elif node.op == 'for_loop_end':
                 #import pdb
@@ -683,6 +684,8 @@ class CodeGen:
 
         prologue = self.gen_fn_def(free_vars, maybe_return_annotation[0])
 
+        import pdb
+        pdb.set_trace()
         code = ''.join(body).lstrip('\n')
         code = '\n'.join('    ' + line for line in code.split('\n'))
         fn_code = f"""
@@ -691,8 +694,8 @@ class CodeGen:
 {prologue}
 {code}"""
 
-        #import pdb
-        #pdb.set_trace()
+        import pdb
+        pdb.set_trace()
         to_patch = '\n\n\ndef forward(self, s1 : torch.SymInt, s2 : torch.SymInt, L_input_ : torch.Tensor):\n    l_input_ = L_input_\n    getitem = l_input_[(0, slice(None, None, None))]\n    size = l_input_.size()\n    getitem_4 = l_input_[(0, slice(None, None, None))]\n    add = getitem_4 + getitem;  getitem_4 = getitem = None\n    getitem_5 = l_input_[(1, slice(None, None, None))]\n    add_1 = getitem_5 + add;  getitem_5 = add = None\n    getitem_6 = l_input_[(2, slice(None, None, None))]\n    add_2 = getitem_6 + add_1;  getitem_6 = add_1 = None\n    getitem_7 = l_input_[(3, slice(None, None, None))];  l_input_ = None\n    add_3 = getitem_7 + add_2;  getitem_7 = add_2 = None\n    return (add_3,)\n    '
 
         #Patch fn_code
@@ -954,7 +957,11 @@ class Graph:
         #    import pdb
         #    pdb.set_trace()
 
-        #print(op, name, args)
+        print('Creating new node:')
+        print(self)
+        print(self.for_loop_instr_stack)
+        print(op, name, args)
+
         #import pdb
         #pdb.set_trace()
         #print((op, args))
@@ -979,6 +986,10 @@ class Graph:
             #import pdb
             #pdb.set_trace()
             for_name = self.for_loop_instr_stack[-1][0]
+            if for_name == 'dummy_range':
+                print('Dummy range found!')
+                import pdb
+                pdb.set_trace()
             if self.for_loop_it_cnts[for_name] >= 0:
                 loop_iteration = self.for_loop_it_cnts[for_name]
             else:
@@ -1012,19 +1023,34 @@ class Graph:
                 exit()
             '''
 
-        if name == 'range':
-            for_name = 'dummy_range'
-            self.for_loop_instr_stack[for_name] = ''
-            loop_iteration = 0
-            self.for_loop_it_cnts[for_name] = loop_iteration
-            print(self.for_loop_instr_stack)
-            import pdb
-            pdb.set_trace()
-
         self._graph_namespace.associate_name_with_obj(name, n)
 
         self._insert(n)
         self._len += 1
+
+        #TODO: boh this does not generalize!!
+        #During the phase where the graph is interpreted, the old graph from python is interpreted twice.
+        #In the second phase, a new graph is created, but it lacks the meta data from the first graph
+        #As soon as a range function is hit, assume that this is for a for_loop and then from thereon bind all the subsequent nodes to it
+        if name == 'range_1':
+            print('Range operation found!')
+            n.meta['for_loop_variable'] = 't'
+            #import pdb
+            #pdb.set_trace()
+            for_name = 'dummy_range'
+            self.for_loop_instr_stack.append([for_name])
+            self.for_loop_instr[for_name] = {'bounds': n.args,
+                                             'ins_nodes' : [],
+                                             'var_name': None,
+                                             'nodes': [n]}
+            #import pdb
+            #pdb.set_trace()
+            n_prev = n.prev
+            n_prev.users[n] = ''
+            loop_iteration = 0
+            self.for_loop_it_cnts[for_name] = loop_iteration
+            print(self.for_loop_instr_stack)
+
         return n
 
     @compatibility(is_backward_compatible=False)

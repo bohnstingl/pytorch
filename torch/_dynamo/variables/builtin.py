@@ -752,11 +752,20 @@ class BuiltinVariable(VariableTracker):
     call_min = _call_min_max
     call_max = _call_min_max
 
+    @staticmethod
+    def call_for_loop(tx, *args):
+        print('Inside call_for_loop')
+        #TODO: boh Here the guard is placed that the shape is specialized
+        import pdb
+        pdb.set_trace()
+        #config.unroll_for_iter and
+        print('Actually do something with the arguments')
+
     def call_range(self, tx, *args):
         #TODO: boh Here the guard is placed that the shape is specialized
         #import pdb
         #pdb.set_trace()
-        #config.unroll_for_iter and 
+        #config.unroll_for_iter and
         if self.unspec_python_args(*args) or self.constant_args(*args):
             args, _ = specialize_args_kwargs(tx, args, {})
             return variables.RangeVariable(args)
@@ -790,6 +799,7 @@ class BuiltinVariable(VariableTracker):
         )
 
     def _call_iter_tuple_list(self, tx, obj=None, *args, **kwargs):
+        #print('Inside _call_iter_tuple_list')
         #import pdb
         #pdb.set_trace()
         if self._dynamic_args(*args, **kwargs):
@@ -822,6 +832,7 @@ class BuiltinVariable(VariableTracker):
                     guards=guards,
                 ).add_options(self, obj)
 
+            #print('Remove guard if not for_loop')
             #import pdb
             #pdb.set_trace()
             #out = cls(list(obj.unpack_var_sequence(tx)),mutable_local=MutableLocal(),guards=guards,).add_options(self, obj)

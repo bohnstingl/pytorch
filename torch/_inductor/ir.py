@@ -4496,8 +4496,8 @@ class LoopBody:
         self.indexing = None
 
         print('Inside LoopBody IR')
-        #import pdb
-        #pdb.set_trace()
+        import pdb
+        pdb.set_trace()
 
     @cache_on_self
     def get_nodes(self):

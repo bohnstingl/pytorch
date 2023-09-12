@@ -343,7 +343,7 @@ class VariableTracker(metaclass=HasPostInit):
         self.recursively_contains = (
             recursively_contains  # provides hint to replace_all when replacing vars
         )
-        self.sym_var_name = None
+        self.sym_var_name = sym_var_name
 
     def __post_init__(self, *args, **kwargs):
         if self.recursively_contains is None:

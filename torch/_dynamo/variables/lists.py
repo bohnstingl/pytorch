@@ -10,7 +10,6 @@ import torch.fx
 from torch.utils import _pytree as pytree
 
 from .. import variables
-#from ..variables.builder import VariableBuilder
 from ..bytecode_transformation import create_call_function, create_instruction
 from ..exc import unimplemented
 from ..guards import make_dupe_guard
@@ -200,14 +199,7 @@ class BaseListVariable(VariableTracker):
 
 class RangeVariable(BaseListVariable):
     def __init__(self, items, **kwargs):
-        #import pdb
-        #pdb.set_trace()
-        #TODO: boh Fix this 
         items_to_map = items
-        #if 'instr' in kwargs:
-        #    pass
-        #    #VariableBuilder(self, LocalSource(k))(f_locals[k]),
-        #else:
         start = variables.ConstantVariable(0)
         stop = None
         step = variables.ConstantVariable(1)
@@ -228,8 +220,6 @@ class RangeVariable(BaseListVariable):
         return range
 
     def as_python_constant(self):
-        #import pdb
-        #pdb.set_trace()
         return range(*[x.as_python_constant() for x in self.items])
 
     def as_proxy(self):

@@ -651,9 +651,17 @@ class GraphLowering(torch.fx.Interpreter):
             buf.decide_layout()
 
     def run_node(self, n: torch.fx.Node):
-        print('Run node in _inductor: ' + str(n) + ', meta: ' + str(n.meta))
-        import pdb
-        pdb.set_trace()
+        print('Run node in _inductor (Name' + str(n.name) + '): ' + str(n) + ', meta: ' + str(n.meta))
+        print(n.users)
+        if len(n.meta['from_node'][0]) == 3:
+            n.meta.update(n.meta['from_node'][0][-1])
+        #import pdb
+        #pdb.set_trace()
+        if 'for_loop_name' in n.meta and 'range' in n.name:
+            print(n.meta['for_loop_name'])
+            return None
+        #import pdb
+        #pdb.set_trace()
         origins = {n}
         if n.op == "call_function":
             args, kwargs = self.fetch_args_kwargs_from_env(n)
