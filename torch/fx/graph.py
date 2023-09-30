@@ -484,7 +484,7 @@ class CodeGen:
             return f"[{', '.join(str(x) for x in shape)}]"
 
         def emit_node(node : Node, for_loop_cnt: int):
-            print(node)
+            #print(node)
             #import pdb
             #pdb.set_trace()
 
@@ -527,7 +527,7 @@ class CodeGen:
                 # pretty print operators
                 if getattr(node.target, "__module__", "") == '_operator' and node.target.__name__ in magic_methods:
                     assert isinstance(node.args, tuple)
-                    print(node)
+                    #print(node)
                     #import pdb
                     #pdb.set_trace()
                     if 'for_loop_dependent_arg' in node.meta and len(node.meta['for_loop_dependent_arg']) > 0:
@@ -619,7 +619,7 @@ class CodeGen:
                 body.append(intendation + self.generate_output(node.args[0]))
                 return
             elif node.op == 'for_loop':
-                print(node.meta)
+                #print(node.meta)
                 #import pdb
                 #pdb.set_trace()
                 #if not config.unroll_for_iter:
@@ -633,7 +633,7 @@ class CodeGen:
                 #pdb.set_trace()
                 #Remove intentation level
                 #if not config.unroll_for_iter:
-                print('Ending for-loop')
+                #print('Ending for-loop')
                 return
             raise NotImplementedError(f'node: {node.op} {node.target}')
 
@@ -957,13 +957,13 @@ class Graph:
         #    import pdb
         #    pdb.set_trace()
 
-        print('Creating new node:')
-        print(self)
-        print(self.for_loop_instr_stack)
-        print(op, name, args)
+        #print('Creating new node:')
+        #print(self)
+        #print(self.for_loop_instr_stack)
+        print(op, target, name, args)
 
-        #import pdb
-        #pdb.set_trace()
+        import pdb
+        pdb.set_trace()
         #print((op, args))
         '''if 'call' in op:
             import pdb
@@ -987,7 +987,7 @@ class Graph:
             #pdb.set_trace()
             for_name = self.for_loop_instr_stack[-1][0]
             if for_name == 'dummy_range':
-                print('Dummy range found!')
+                #print('Dummy range found!')
                 import pdb
                 pdb.set_trace()
             if self.for_loop_it_cnts[for_name] >= 0:
@@ -1033,7 +1033,7 @@ class Graph:
         #In the second phase, a new graph is created, but it lacks the meta data from the first graph
         #As soon as a range function is hit, assume that this is for a for_loop and then from thereon bind all the subsequent nodes to it
         if name == 'range_1':
-            print('Range operation found!')
+            #print('Range operation found!')
             n.meta['for_loop_variable'] = 't'
             #import pdb
             #pdb.set_trace()
@@ -1049,7 +1049,7 @@ class Graph:
             n_prev.users[n] = ''
             loop_iteration = 0
             self.for_loop_it_cnts[for_name] = loop_iteration
-            print(self.for_loop_instr_stack)
+            #print(self.for_loop_instr_stack)
 
         return n
 
@@ -1623,7 +1623,7 @@ class Graph:
             to call unless you know that your FX graph consists entirely
             of functional operations.
         """
-        print([n for n in self.nodes])
+        #print([n for n in self.nodes])
         #import pdb
         #pdb.set_trace()
 
@@ -1645,7 +1645,7 @@ class Graph:
                 self.erase_node(node)
                 changed = True
 
-        print([n for n in self.nodes])
+        #print([n for n in self.nodes])
         #import pdb
         #pdb.set_trace()
 

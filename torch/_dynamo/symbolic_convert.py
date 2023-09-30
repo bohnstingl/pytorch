@@ -648,7 +648,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             self.checkpoint = inst, self.copy_graphstate()
 
         log.debug("TRACE %s %s %s", inst.opname, inst.argval, self.stack)
-        print("TRACE %s %s %s", inst.opname, inst.argval, self.stack)
+        #print("TRACE %s %s %s", inst.opname, inst.argval, self.stack)
         #import pdb
         #pdb.set_trace()
 
@@ -745,6 +745,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
     def run(self):
         with self.run_ctx_mgr():
             try:
+                #import pdb
+                #pdb.set_trace()
                 self.output.push_tx(self)
                 #Here this loop does the unrolling of the for-loop. There is a FOR-ITER instr, then the block and then is a JUMP_BACKWARD op.
                 #This combination unrolls the for-loop and does not result in the for-loop in the triton code
@@ -766,8 +768,15 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
                 ):
                     #import pdb
                     #pdb.set_trace()
-                    print([n for n in self.output.graph.nodes])
+                    #print(self.output.guards)
+                    #print(self.output.shape_env.guards)
+                    #print([n for n in self.output.graph.nodes])
                     pass
+                #print(self.output.shape_env.guards)
+                #exit()
+                #import pdb
+                #pdb.set_trace()
+                print([n for n in self.output.graph.nodes])
             except BackendCompilerFailed:
                 raise
             except Exception as e:
@@ -1173,7 +1182,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
                 self.push(val)
             except StopIteration:
                 if not config.unroll_for_iter and len(self.output.graph.for_loop_instr_stack) > 0:
-                    print('Stop iteration met!')
+                    #print('Stop iteration met!')
                     #import pdb
                     #pdb.set_trace()
                     #Iterate over the nodes and take a snapshot of the usage counters so far
@@ -1263,7 +1272,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
 
                         #4.) Determine which argument of the node in the loop is related to the loop iteration
                         #TODO: boh one needs to additionally check whether n.meta['stack_trace'] (line) contains the loop-variable, e.g., t
-                        print(n.name)
+                        #print(n.name)
                         #import pdb
                         #pdb.set_trace()
                         for for_name in self.output.graph.for_loop_instr.keys():
@@ -1280,8 +1289,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
                                 #Compare arguments
                                 args_first_it = n.args
                                 args_second_it = n_next.args
-                                print(args_first_it)
-                                print(args_second_it)
+                                #print(args_first_it)
+                                #print(args_second_it)
                                 arg_loop_ind = []
                                 for a_ind, (a_f_i, a_s_i) in enumerate(zip(args_first_it, args_second_it)):
                                     if type(a_f_i) == tuple:
@@ -1319,8 +1328,8 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
                         n = list(self.output.graph.nodes)[-1]
                         n.meta['for_loop_properties']['output'] = None
                     
-                    print([(n.name, n.meta['for_loop_properties'] if 'for_loop_properties' in n.meta else '') for n in self.output.graph.nodes])
-                    print([(n.name, n.meta['for_loop_dependent_arg'] if 'for_loop_dependent_arg' in n.meta else '') for n in self.output.graph.nodes])
+                    #print([(n.name, n.meta['for_loop_properties'] if 'for_loop_properties' in n.meta else '') for n in self.output.graph.nodes])
+                    #print([(n.name, n.meta['for_loop_dependent_arg'] if 'for_loop_dependent_arg' in n.meta else '') for n in self.output.graph.nodes])
                     #import pdb
                     #pdb.set_trace()
 
@@ -1471,6 +1480,7 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
             #ret = BuiltinVariable(iter).call_function(self, [ConstantVariable(n.args[1]) if type(n.args[1]) == int else n.args[1], n.args[2][1], ConstantVariable(n.args[3]) if type(n.args[3]) == int else n.args[3]], n.kwargs)
             #self.push(ret)
             #Access to the guards of the output graph
+            #self.output.shape_env.guards
             #args.var_getattr(self, 'stop').sym_var_name
             
             #import pdb
@@ -2574,7 +2584,7 @@ class InstructionTranslator(InstructionTranslatorBase):
                     if for_search_active and any([for_name in u.name for u in n.users.keys()]):
                         import pdb
                         pdb.set_trace()
-                        print('Node used after loop')
+                        #print('Node used after loop')
                         n.meta['for_loop_properties'].append('output')
 
         self.output.compile_subgraph(
