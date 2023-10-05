@@ -1,4 +1,3 @@
-import builtins
 import collections
 import dataclasses
 import functools
@@ -33,9 +32,7 @@ def _listlike_contains_helper(items, search, tx, options):
         return item.as_python_constant()
 
     if search.is_python_constant():
-        result = any(
-            _get(x) == _get(search) for x in items
-        )
+        result = any(_get(x) == _get(search) for x in items)
         return variables.ConstantVariable.create(result, **options)
 
     from .builtin import BuiltinVariable

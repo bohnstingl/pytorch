@@ -102,7 +102,6 @@ from .functions import (
 from .higher_order_ops import TorchHigherOrderOperatorVariable
 from .lists import (
     BaseListVariable,
-    DequeVariable,
     ListVariable,
     NamedTupleVariable,
     RangeVariable,
@@ -1374,7 +1373,13 @@ def wrap_fx_proxy(tx, proxy, example_value=None, **options):
 # SOMETHING INTO THE GRAPH.  This is sort of obvious, because you can't call
 # this function without a proxy.
 def wrap_fx_proxy_cls(
-    target_cls, tx, proxy, example_value=None, ignore_subclass=False, allow_none=False, **options
+    target_cls,
+    tx,
+    proxy,
+    example_value=None,
+    ignore_subclass=False,
+    allow_none=False,
+    **options,
 ):
     import torch._export.constraints
     from ..symbolic_convert import InstructionTranslatorBase

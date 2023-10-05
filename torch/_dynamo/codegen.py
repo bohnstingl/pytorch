@@ -28,7 +28,6 @@ from .variables.tensor import (
     TensorWithTFOverrideVariable,
     UnspecializedPythonVariable,
 )
-from .variables.constant import ConstantVariable
 
 
 @dataclasses.dataclass
