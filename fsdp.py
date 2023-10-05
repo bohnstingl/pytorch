@@ -1,30 +1,36 @@
 """
 torchrun --standalone --nproc_per_node=2 fsdp.py
 """
-import os
-
-import torch
-import torch._dynamo
-from torch._dynamo import compiled_autograd
-import torch.distributed as dist
-import torch.nn as nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 import contextlib
 import logging
+import os
 import sys
 import traceback
 
+import torch
+import torch._dynamo
+import torch.distributed as dist
+import torch.nn as nn
+from torch._dynamo import compiled_autograd
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.wrap import ModuleWrapPolicy
+
 torch_log = logging.getLogger("torch")
+
 
 def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
 
-    torch_log.error("Uncaught exception\n%s", ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback)))
+    torch_log.error(
+        "Uncaught exception\n%s",
+        "".join(traceback.format_exception(exc_type, exc_value, exc_traceback)),
+    )
+
 
 sys.excepthook = handle_exception
+
 
 def init():
     torch.manual_seed(0)
@@ -47,7 +53,9 @@ def printing_eager(gm, inputs):
     gm.graph.print_tabular()
     return gm.forward
 
+
 gpu_id = int(os.environ["LOCAL_RANK"])
+
 
 def run(model, optim):
     torch.manual_seed(42)
@@ -83,23 +91,27 @@ def main(compiled_fwd, compiled_bwd):
         print("Compiling autograd?")
         return torch.compile(gm, backend="eager", fullgraph=True, dynamic=False)
 
-    ctx = compiled_autograd.enable(compiler_fn) if compiled_bwd else contextlib.nullcontext()
+    ctx = (
+        compiled_autograd.enable(compiler_fn)
+        if compiled_bwd
+        else contextlib.nullcontext()
+    )
 
     with ctx:
         if compiled_fwd:
-                print("RUNNING COMPILE")
-                torch._dynamo.config.capture_dynamic_output_shape_ops = True
-                torch._dynamo.config.capture_scalar_outputs = True
-                model = torch._dynamo.optimize("aot_eager", nopython=True, dynamic=False)(model)
-                res = run(model, optim)
+            print("RUNNING COMPILE")
+            torch._dynamo.config.capture_dynamic_output_shape_ops = True
+            torch._dynamo.config.capture_scalar_outputs = True
+            model = torch._dynamo.optimize("aot_eager", nopython=True, dynamic=False)(
+                model
+            )
+            res = run(model, optim)
         else:
             res = run(model, optim)
     return res
 
 
 if __name__ == "__main__":
-    import time
-
     dist.init_process_group(backend="nccl")
     device = f"cuda:{gpu_id}"
     torch.cuda.set_device(device)
