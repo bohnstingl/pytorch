@@ -61,7 +61,6 @@ def inner_trace(mode, *args, fn):
 
     assert len(args) == 1
     grad = args[0]
-    original_grad = grad
     assert isinstance(grad, torch.Tensor)
 
     def self_invoke(*args):

@@ -115,7 +115,6 @@ class PyCodegen:
                 SymNodeVariable,
                 UnspecializedPythonVariable,
                 NumpyNdarrayVariable,
-                torch._dynamo.variables.ctx_manager.CUDAStreamVariable,
                 torch._dynamo.variables.user_defined.AccumulateGradVariable,
             ),
         ):
