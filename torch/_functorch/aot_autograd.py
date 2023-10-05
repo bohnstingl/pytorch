@@ -775,7 +775,7 @@ def run_functionalized_fw_and_collect_metadata(
             else:
                 torch._sync(f_arg)
                 new_arg = torch._from_functional_tensor(f_arg)
-            if arg is not new_arg:
+            if arg is not new_arg and False:
                 if StorageWeakRef(arg.untyped_storage()) == StorageWeakRef(new_arg.untyped_storage()):
                     mutates_data = False
                     mutates_metadata = True
