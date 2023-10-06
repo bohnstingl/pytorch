@@ -1267,6 +1267,8 @@ aten::squeeze_copy.dims
 aten::squeeze_copy.dims_out
 aten::squeeze_copy.out
 aten::sspaddmm.out
+aten::sum.IntList_out
+aten::sum.out
 aten::t_
 aten::t_copy
 aten::t_copy.out
