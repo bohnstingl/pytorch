@@ -360,6 +360,8 @@ class TorchHigherOrderOperatorVariable(VariableTracker):
             return ExportTracepointHigherOrderVariable(value, source, **kwargs)
         elif value.__name__ == "trace_wrapped":
             return TraceWrappedHigherOrderOperatorVariable(value, source, **kwargs)
+        elif value.__name__ in ("scan", "scan_impl", "scan_op"):
+            return ScanHigherOrderVariable(value, source, **kwargs)
         else:
             unimplemented(f"HigherOrderOperator {value.__name__}")
 
@@ -1364,3 +1366,155 @@ class TraceWrappedHigherOrderOperatorVariable(TorchHigherOrderOperatorVariable):
         assert isinstance(grad, TensorVariable)
 
         return fn.call_function(tx, args, {})
+
+class ScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
+    def call_function(
+        self, tx, args: List[VariableTracker], kwargs: Dict[str, VariableTracker]
+    ) -> VariableTracker:
+        from . import (
+            ConstantVariable,
+            NestedUserFunctionVariable,
+            TensorVariable,
+            UserFunctionVariable,
+        )
+        from .builder import wrap_fx_proxy
+            
+        args, kwargs = VariableTracker.apply(lambda x: x.realize(), (args, kwargs))
+            
+        #import pdb
+        #pdb.set_trace()
+        if len(args) != 3:
+            unimplemented(
+                f"Expected 3 arguments but got {len(args)}.\n"
+                f"Usage: scan(f, init, xs)",
+            )
+        # f
+        if args[0] is not callable and not isinstance(args[0], UserFunctionVariable):
+            unimplemented(
+                f"Expected f to be a callable "
+                f"item but got {str(type(args[0]))} "
+                f"with original python type {str(args[0].python_type())}.",
+            )
+        # nested user functions not supported at the moment
+        if isinstance(args[0], NestedUserFunctionVariable):
+            unimplemented(
+                f"NestedUserFunctions are currently not supported.",
+            )
+        # init
+        if type(args[1]) not in (torch.Tensor, ConstantVariable, TensorVariable, SymNodeVariable):
+            unimplemented(
+                f"Expected init to be a tensor "
+                f"item but got {str(type(args[1]))} "
+                f"with original python type {str(args[1].python_type())}.",
+            )
+        # xs
+        if type(args[2]) not in (torch.Tensor, ConstantVariable, TensorVariable, SymNodeVariable):
+            unimplemented(
+                f"Expected xs to be a tensor "
+                f"item but got {str(type(args[2]))} "
+                f"with original python type {str(args[2].python_type())}.",
+            )
+        
+        #Shape check
+        shape1 = args[1].get_real_value().size()
+        shape2 = args[2].get_real_value().size()
+        # shape1 = get_fake_value(args[1].as_proxy().node, tx).size()
+        # shape2 = get_fake_value(args[2].as_proxy().node, tx).size()
+        
+        if shape1 == () or shape2 == ():
+            unimplemented(
+                f"Expected init and xs to be tensors and not scalars "
+                f"but got init shape: {str(shape1)} "
+                f"and xs shape: {str(shape2)}.",
+            )
+        if shape1 != shape2[1:]:
+            unimplemented(
+                f"Expected init and xs to have the same shape except for the first dimension "
+                f"but got init shape: {str(shape1)} "
+                f"and xs shape: {str(shape2)}.",
+            )
+        '''
+        if args[1].size[0] != 1:
+            raise UserError(
+                UserErrorType.DYNAMIC_CONTROL_FLOW,
+                f"Expected first dimension of init to be 1 "
+                f"but got init shape: {str(args[0].shape)}.",
+            )
+        '''
+
+        # assert type(args[0].realize()) in (
+        #     UserFunctionVariable,
+        #     NestedUserFunctionVariable,
+        # )
+        # assert type(args[1].realize()) is TensorVariable
+
+        # sample_shape = get_fake_value(args[1].as_proxy().node, tx).size()
+
+        # if len(sample_shape) < 1 or sample_shape[0] == 0:
+        #     unimplemented(
+        #         "map() operator doesn't support scalar or zero-sized tensors during tracing."
+        #     )
+
+        checkpoint = tx.copy_graphstate()
+        # To get the example output from map() we will need to provide at least one sample to
+        # the loop body. In our case we will always use xs[0], and our map() won't support zero
+        # sized tensor during tracing.
+        first_dim = args[1].call_method(
+            tx, "__getitem__", args=[ConstantVariable.create(0)], kwargs={}
+        )
+
+        # TODO: Support kwargs
+        (
+            (body_r, _),
+            body_graph,
+            body_lifted_freevars,
+        ) = speculate_subgraph(
+            tx,
+            args[0],
+            [
+                args[1],
+                args[2],
+            ],
+            {},
+            tx.output.graph,
+            checkpoint,
+            "torch.ops.higher_order.scan",
+            source_target=self.value,
+        )
+
+        body_nn_modules = tx.copy_graphstate().output.nn_modules
+
+        body_name = add_subgraph(
+            tx,
+            self.source,
+            "scan_body",
+            torch.fx.GraphModule(body_nn_modules.nn_modules, body_graph),
+        )
+
+        body_node = make_attr(tx, body_name)
+        p_args = (
+            body_node,
+            *(arg.as_proxy() for arg in args[1:]),
+            *(arg for arg in body_lifted_freevars.keys()),
+        )
+        # non_single_tensor_return_unsupported("torch.ops.higher_order.scan", body_r)
+        # r = body_r.as_proxy().node.meta["example_value"]
+        # example_value = r.new_empty([sample_shape[0], *r.shape])
+        example_value = pytree.tree_map_only(
+                torch.fx.Proxy,
+                lambda a: a.node.meta["example_value"],
+                body_r.as_proxy(),
+            )
+
+        # Store the invocation as a call
+        return wrap_fx_proxy(
+            tx=tx,
+            proxy=tx.output.create_proxy(
+                "call_function",
+                self.value,
+                args=tuple(p_args),
+                kwargs={},
+            ),
+            example_value=example_value,
+        )
+        

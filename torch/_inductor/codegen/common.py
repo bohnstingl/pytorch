@@ -960,7 +960,10 @@ class Kernel(CodeGen):
     def reduction(self, dtype, src_dtype, reduction_type, value):
         raise NotImplementedError()
 
-    def scan(self, dtype, combine_fn, value, init):
+    def scan_associative(self, dtype, combine_fn, value, init):
+        raise NotImplementedError()
+
+    def scan(self, dtype, f, init_arg, xs_arg, xs_size, carry_size, out_size, reverse, return_out):
         raise NotImplementedError()
 
     def bucketize(
@@ -1099,8 +1102,12 @@ class Kernel(CodeGen):
                 return self.reduction(dtype, src_dtype, reduction_type, value)
 
             @staticmethod
-            def scan(dtype, combine_fn, value, init):
-                return self.scan(dtype, combine_fn, value, init)
+            def scan_associative(dtype, combine_fn, value, init):
+                return self.scan_associative(dtype, combine_fn, value, init)
+
+            @staticmethod
+            def scan(dtype, f, init_arg, xs_arg, xs_size, carry_size, out_size, reverse, return_out):
+                return self.scan(dtype, f, init_arg, xs_arg, xs_size, carry_size, out_size, reverse, return_out)
 
             @staticmethod
             def bucketize(

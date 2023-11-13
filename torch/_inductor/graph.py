@@ -583,6 +583,9 @@ class GraphLowering(torch.fx.Interpreter):
             # passthrough lowerings from .pattern_matcher
             return target(*args, **kwargs)
 
+        if "scan" in target.name():
+            #TODO: boh Hack
+            target = torch.ops.scan_impl
         if target not in lowerings:
             assert isinstance(
                 target, torch._ops.OpOverload
@@ -628,6 +631,9 @@ class GraphLowering(torch.fx.Interpreter):
     def get_attr(self, target, args, kwargs):
         # this is a constant
         value = getattr(self.module, target)
+        
+        if isinstance(value, torch.fx.GraphModule):
+            return value
 
         if config.always_keep_tensor_constants or unsupported_output_tensor(value):
             return self.add_tensor_constant(value, target)

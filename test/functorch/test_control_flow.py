@@ -12,6 +12,7 @@ from torch.testing._internal.common_utils import run_tests, TestCase
 from torch._dynamo.exc import CondOpArgsMismatchError
 from torch.testing._internal.common_quantization import skipIfNoDynamoSupport
 from torch._subclasses.functional_tensor import FunctionalTensor
+from torch._higher_order_ops.scan import scan
 
 # TODO: pull these helpers from AOTAutograd later
 def to_fun(t):
@@ -50,6 +51,16 @@ def _fake_map(f, x, *args):
     for xp in x_pytrees:
         zs.append(f(xp, *args))
     return _stack_pytree(zs)
+
+def _fake_scan(f, init, x):
+    from functorch.experimental._map import _stack_pytree, _unstack_pytree
+    x_pytrees = _unstack_pytree(x)
+    zs = []
+    carry = init
+    for xp in x_pytrees:
+        carry, out = f(carry, xp)
+        zs.append(out)
+    return carry, _stack_pytree(zs)
 
 def collect_meta_for_filtered_nodes(gm: torch.fx.GraphModule, node_names, meta_field_name):
     ret = []
@@ -249,6 +260,153 @@ class TestControlFlow(TestCase):
         true_outs = fwbw(control_flow.map, f, x, y)
         fake_outs = fwbw(_fake_map, f, x, y)
         self.assertEqual(true_outs, fake_outs)
+        
+    def test_scan_simple(self):
+        def f(carry, x):
+            return carry+1, x+carry
+
+        init = torch.rand(1, 2)
+        xs = torch.rand(10, 1, 2)
+        carry_out, ys = scan(f, init, xs)
+        expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        self.assertEqual(expected_carry_out, carry_out)
+        self.assertEqual(expected_ys, ys)
+    
+    def test_scan_autograd_simple_f(self):
+        def f(carry, x):
+            return carry+1, x*carry
+
+        init = torch.rand(2, requires_grad=True)
+        xs = torch.rand(10, 2, requires_grad=True)
+        carry_out, ys = scan(f, init, xs)
+        expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        self.assertEqual(expected_carry_out, carry_out)
+        self.assertEqual(expected_ys, ys)
+        # grad_carry_out = torch.ones_like(carry_out)
+        # grad_ys = torch.ones_like(ys)
+        # grads = torch.autograd.grad((carry_out, ys), (init, xs), (grad_carry_out, grad_ys))
+        # expected_grads = torch.autograd.grad((expected_carry_out, expected_ys), (init, xs), (grad_carry_out, grad_ys))
+        # self.assertEqual(expected_grads, grads)
+     
+    def test_scan_autograd_simple_bf_separate(self):
+        def f(carry, x):
+            return carry+1, x+1
+
+        init = torch.rand(1, 2, requires_grad=True)
+        xs = torch.rand(10, 1, 2, requires_grad=True)
+        carry_out, ys = scan(f, init, xs)
+        expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        self.assertEqual(expected_carry_out, carry_out)
+        self.assertEqual(expected_ys, ys)
+        # grad_carry_out = torch.ones_like(carry_out)
+        # grad_ys = torch.ones_like(ys)
+        # grads = torch.autograd.grad((carry_out, ys), (init, xs), (grad_carry_out, grad_ys))
+        # expected_grads = torch.autograd.grad((expected_carry_out, expected_ys), (init, xs), (grad_carry_out, grad_ys))
+        # self.assertEqual(expected_grads, grads)
+        
+    def test_scan_autograd_simple_bf_mixed(self):
+        def f(carry, x):
+            return carry+x, x*carry
+
+        init = torch.rand(1, 2, requires_grad=True)
+        xs = torch.rand(10, 1, 2, requires_grad=True)
+        carry_out, ys = scan(f, init, xs)
+        expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        self.assertEqual(expected_carry_out, carry_out)
+        self.assertEqual(expected_ys, ys)
+        # grad_carry_out = torch.ones_like(carry_out)
+        # grad_ys = torch.ones_like(ys)
+        # grads = torch.autograd.grad((carry_out, ys), (init, xs), (grad_carry_out, grad_ys))
+        # expected_grads = torch.autograd.grad((expected_carry_out, expected_ys), (init, xs), (grad_carry_out, grad_ys))
+        # self.assertEqual(expected_grads, grads)
+    
+    def test_scan_autograd_simple_bfg(self):
+        def f(carry, x):
+            return carry+1, x*carry
+
+        init = torch.rand(3, 2, requires_grad=True)
+        xs = torch.rand(10, 3, 2, requires_grad=True)
+        carry_out, ys = scan(f, init, xs)
+        expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        self.assertEqual(expected_carry_out, carry_out)
+        self.assertEqual(expected_ys, ys)
+        # grad_carry_out = torch.ones_like(carry_out)
+        # grad_ys = torch.ones_like(ys)
+        # grads = torch.autograd.grad((carry_out, ys), (init, xs), (grad_carry_out, grad_ys))
+        # expected_grads = torch.autograd.grad((expected_carry_out, expected_ys), (init, xs), (grad_carry_out, grad_ys))
+        # self.assertEqual(expected_grads, grads)
+        
+    def test_scan_autograd_simple_bfgh(self):
+        def f(carry, x):
+            return carry+1, x*carry
+
+        init = torch.rand(5, 3, 2, requires_grad=True)
+        xs = torch.rand(10, 5, 3, 2, requires_grad=True)
+        carry_out, ys = scan(f, init, xs)
+        expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        self.assertEqual(expected_carry_out, carry_out)
+        self.assertEqual(expected_ys, ys)
+        # grad_carry_out = torch.ones_like(carry_out)
+        # grad_ys = torch.ones_like(ys)
+        # grads = torch.autograd.grad((carry_out, ys), (init, xs), (grad_carry_out, grad_ys))
+        # expected_grads = torch.autograd.grad((expected_carry_out, expected_ys), (init, xs), (grad_carry_out, grad_ys))
+        # self.assertEqual(expected_grads, grads)
+    
+    def test_scan_autograd_simple_partial_grad(self):
+        def f(carry, x):
+            return carry+1, x*carry
+
+        init = torch.rand(1, 2, requires_grad=True)
+        xs = torch.rand(10, 1, 2, requires_grad=False)
+        carry_out, ys = scan(f, init, xs)
+        expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        self.assertEqual(expected_carry_out, carry_out)
+        self.assertEqual(expected_ys, ys)
+        # grad_carry_out = torch.ones_like(carry_out)
+        # grad_ys = torch.ones_like(ys)
+        # grads = torch.autograd.grad((carry_out, ys), (init,), (grad_carry_out, grad_ys))
+        # expected_grads = torch.autograd.grad((expected_carry_out, expected_ys), (init,), (grad_carry_out, grad_ys))
+        # self.assertEqual(expected_grads, grads)
+    
+    def test_scan_autograd_nested_list(self):
+        def f(carry, x):
+            #import pdb
+            #pdb.set_trace()
+            return carry+1, (x[0]*carry, x[1]+carry)
+
+        init = torch.rand(1, 2, requires_grad=True)
+        xs = [torch.rand(10, 1, 2, requires_grad=True), torch.rand(10, 1, 2, requires_grad=True)]
+        carry_out, ys = scan(f, init, xs)
+        import pdb
+        pdb.set_trace()
+        expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        self.assertEqual(expected_carry_out, carry_out)
+        self.assertEqual(expected_ys, ys)
+        # grad_carry_out = torch.ones_like(carry_out)
+        # grad_ys = torch.ones_like(ys[0])
+        # grads = torch.autograd.grad((carry_out, ys[0]), (xs[0],), (grad_carry_out, grad_ys))
+        # import pdb
+        # pdb.set_trace()
+        # expected_grads = torch.autograd.grad((expected_carry_out, expected_ys[0]), (xs[0],), (grad_carry_out, grad_ys))
+        # self.assertEqual(expected_grads, grads)
+    
+    def test_scan_autograd_nested_lists(self):
+        def f(carry, x):
+            return (carry[0]+1, carry[1]+2), (x[0]*carry[0], x[1]+carry[1])
+
+        init = [torch.rand(1, 2, requires_grad=True), torch.rand(1, 2, requires_grad=True)]
+        xs = [torch.rand(10, 1, 2, requires_grad=True), torch.rand(10, 1, 2, requires_grad=True)]
+        carry_out, ys = scan(f, init, xs)
+        #import pdb
+        #pdb.set_trace()
+        expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        self.assertEqual(expected_carry_out, carry_out)
+        self.assertEqual(expected_ys, ys)
+        grad_carry_out = torch.ones_like(carry_out[0])
+        grad_ys = torch.ones_like(ys[0])
+        grads = torch.autograd.grad((carry_out[0], ys[0]), (xs[0],), (grad_carry_out, grad_ys))
+        expected_grads = torch.autograd.grad((expected_carry_out[0], expected_ys[0]), (xs[0],), (grad_carry_out, grad_ys))
+        self.assertEqual(expected_grads, grads)
 
 
 @skipIfNoDynamoSupport

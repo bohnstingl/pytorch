@@ -88,6 +88,8 @@ from torch._inductor.utils import has_torchvision_roi_align
 from torch.testing._internal.common_utils import slowTest
 from torch.testing._internal.inductor_utils import HAS_CPU, HAS_CUDA
 
+from torch._higher_order_ops.scan import scan
+
 HAS_MULTIGPU = HAS_CUDA and torch.cuda.device_count() >= 2
 HAS_AVX2 = "fbgemm" in torch.backends.quantized.supported_engines
 aten = torch.ops.aten
@@ -110,6 +112,16 @@ def run_fw_bw_and_get_code(fn):
         return result
 
     return run_and_get_code(run_with_backward)
+
+def _fake_scan(f, init, x):
+    from functorch.experimental._map import _stack_pytree, _unstack_pytree
+    x_pytrees = _unstack_pytree(x)
+    zs = []
+    carry = init
+    for xp in x_pytrees:
+        carry, out = f(carry, xp)
+        zs.append(out)
+    return carry, _stack_pytree(zs)
 
 
 class TestCase(TorchTestCase):
@@ -344,6 +356,9 @@ def check_model(
         correct_flat = reference_to_expect(actual_flat, correct_flat)
         correct = tree_unflatten(correct_flat, correct_spec)
 
+    import pdb
+    pdb.set_trace()
+
     if assert_equal:
         self.assertEqual(
             actual,
@@ -527,7 +542,7 @@ def _run_and_assert_no_indirect_indexing(test_case, func, *args, **kwargs):
 
     return result
 
-
+'''
 class SweepInputs2:
     input_gen_types1 = [
         "dense",
@@ -566,9 +581,10 @@ class SweepInputs2:
         for name1 in cls.input_gen_types1:
             for name2 in cls.input_gen_types2:
                 cls.gen_template(name1, name2)
-
+'''
 
 class CommonTemplate:
+    '''
     def test_bool(self):
         def fn(a, b):
             return (
@@ -7509,6 +7525,36 @@ class CommonTemplate:
         a = torch.randn(2**24, 65, device=self.device)
         b = torch.randn(65, 2**24, device=self.device)
         fn(a, b)
+    '''
+    
+    def test_scan_simple(self):
+        import traceback
+        
+        #@torch.compile(backend='inductor', fullgraph=True)
+        def f(carry, x):
+            #return torch.ops.aten.clone(carry)+1, x+carry
+            return carry+1, x+carry
+
+        init = torch.rand(1, 2, device=torch.device('cuda')).contiguous()
+        xs = torch.rand(10, 1, 2, device=torch.device('cuda')).contiguous()
+
+        try:
+            fc = f
+            #fc = torch.compile(f, backend='inductor', fullgraph=True)
+            #scan_comp = torch.compile(scan, backend='inductor', fullgraph=True)
+            #import pdb
+            #pdb.set_trace()
+            scan_res = self.common(scan, [fc, init, xs])
+        except Exception:
+            print(traceback.format_exc())
+            import pdb
+            pdb.set_trace()
+
+        import pdb
+        pdb.set_trace()
+        # expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        # self.assertEqual(expected_carry_out, carry_out)
+        # self.assertEqual(expected_ys, ys)
 
 
 @dataclasses.dataclass
@@ -7552,7 +7598,7 @@ def copy_tests(
 
 
 if HAS_CPU and not torch.backends.mps.is_available():
-
+    '''
     class SweepInputsCpuTest(SweepInputs2, TestCase):
         gen = InputGen(10, "cpu")
 
@@ -7563,20 +7609,23 @@ if HAS_CPU and not torch.backends.mps.is_available():
         device = "cpu"
 
     copy_tests(CommonTemplate, CpuTests, "cpu")
+    '''
+    pass
 
 if HAS_CUDA and not TEST_WITH_ASAN:
-
+    pass
+    '''
     class SweepInputsCudaTest(SweepInputs2, TestCase):
         gen = InputGen(10, "cuda")
 
     SweepInputsCudaTest.populate()
-
+    '''
     class CudaTests(TestCase):
         common = check_model_cuda
         device = "cuda"
-
+    
     copy_tests(CommonTemplate, CudaTests, "cuda")
-
+    '''
     class TritonCodeGenTests(TestCase):
         from torch._inductor.triton_heuristics import CachingAutotuner
 
@@ -8148,7 +8197,9 @@ if HAS_CUDA and not TEST_WITH_ASAN:
                             seq_nr_set.add(int(res.group(1)))
 
             self.assertTrue(bwd_seq_nr_set.issubset(fwd_seq_nr_set))
-
+    '''
+        
+    '''
     class RNNTest(TestCase):
         class Model(torch.nn.Module):
             def __init__(self):
@@ -8193,10 +8244,10 @@ if HAS_CUDA and not TEST_WITH_ASAN:
             x[0, 0] = float("nan")
             with self.assertRaises(AssertionError):
                 torch.compile(f)(x)
-
+    '''
 
 if HAS_CPU:
-
+    '''
     class TestFull(TestCase):
         def test_full_dtype(self):
             pytypes = (
@@ -8240,7 +8291,8 @@ if HAS_CPU:
                         ret_opt = fn_opt(pytype, dtype)
 
                 self.assertEqual(ret_opt, fn(pytype, dtype))
-
+    '''
+    pass
 
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests

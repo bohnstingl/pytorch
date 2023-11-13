@@ -1553,7 +1553,7 @@ class Scan(Loops):
     def store_reduction(self, output_name, indexer, vars, scan_vars):
         idx = self.reindex(vars, scan_vars)
         value = self.inner_fn(idx)
-        result = ops.scan(self.dtype, self.combine_fn, value, self.init)
+        result = ops.scan_associative(self.dtype, self.combine_fn, value, self.init)
         return ops.store(output_name, indexer(idx), result)
 
     def get_reduction_type(self):
@@ -6522,16 +6522,24 @@ class LoopBodyBlock:
                 )
 
             @staticmethod
-            def scan(
+            def scan_associative(
                 dtype_proxy, combine_fn: Callable[..., Any], value_proxy, init_proxy
             ):
                 def shim(dtype, value, init):
-                    return V.ops.scan(dtype, combine_fn, value, init)
+                    return V.ops.scan_associative(dtype, combine_fn, value, init)
 
-                name = self.body.add_submodule(shim, "scan")
+                name = self.body.add_submodule(shim, "scan_associative")
                 return tracer.create_proxy(
                     "call_module", name, (dtype_proxy, value_proxy, init_proxy), {}
                 )
+                
+            @staticmethod
+            def scan(dtype_proxy, f, init_proxy, xs_proxy, xs_size, carry_size, out_size, reverse, return_out):
+                def shim(dtype, init, xs, reverse, return_out):
+                    return V.ops.scan(dtype, f, init, xs, xs_size, carry_size, out_size, reverse, return_out)
+
+                name = self.body.add_submodule(shim, "scan")
+                return tracer.create_proxy("call_module", name, (dtype_proxy, init_proxy, xs_proxy, reverse, return_out), {})
 
             @staticmethod
             def indirect_indexing(index_proxy, size, check=True):
