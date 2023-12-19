@@ -4862,7 +4862,9 @@ def scan(f, init: TensorBox, xs: TensorBox, reverse=False):
         # pdb.set_trace()
         init = [in_lo(init_size) for in_lo in init_load]
         xs = [xs_lo(xs_size) for xs_lo in xs_load]
-        carry_out = ops.scan(dtype, f, init[0], xs[0], xs_size, [carry_size[1]], out_size, reverse, return_out)
+        # import pdb
+        # pdb.set_trace()
+        carry_out = ops.scan(dtype, f, init[0], xs[0], xs_size, carry_size, out_size, reverse, return_out)
         return carry_out
 
     #import pdb
@@ -4883,24 +4885,27 @@ def scan(f, init: TensorBox, xs: TensorBox, reverse=False):
     #     )
     #     return ops.to_dtype(result, dtype)
 
-    # carry = Pointwise.create(
-    #     device=device,
-    #     dtype=dtype,
-    #     inner_fn=functools.partial(fn, return_out=False),
-    #     ranges=list(carry_size),
-    # )
+    carry = Pointwise.create(
+        device=device,
+        dtype=dtype,
+        inner_fn=functools.partial(fn, return_out=False),
+        ranges=list(carry_size),
+    )
 
+    # import pdb
+    # pdb.set_trace()
     out = Pointwise.create(
     #out = ir.Scan.create(
         device=device,
         dtype=dtype,
         inner_fn=functools.partial(fn, return_out=True),
+        #ranges=[1]+list(out_size[1:]),
         ranges=list(out_size),
     )
     # import pdb
     # pdb.set_trace()
 
-    return [init, [out]]
+    return [[carry], [out]]
     #return [init, xs]
 
 

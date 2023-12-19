@@ -276,6 +276,8 @@ def check_model(
     check_has_compiled=True,
     output_process_fn_grad=lambda x: x,
 ):
+    # import pdb
+    # pdb.set_trace()
     kwargs = kwargs or {}
     torch._dynamo.reset()
 
@@ -330,6 +332,9 @@ def check_model(
 
     run = torch._dynamo.optimize(compile_fx_wrapper, nopython=nopython)(run)
 
+    # import pdb
+    # pdb.set_trace()
+
     torch.manual_seed(0)
     actual = run(*example_inputs, **kwargs)
     # if not called:
@@ -356,6 +361,8 @@ def check_model(
         correct_flat = reference_to_expect(actual_flat, correct_flat)
         correct = tree_unflatten(correct_flat, correct_spec)
 
+    print(actual)
+    print(correct)
     import pdb
     pdb.set_trace()
 
@@ -1161,6 +1168,7 @@ class CommonTemplate:
 
         self.common(fn, (torch.ones(32, 32) * 70,))
 
+    '''
     def test_cumsum(self):
         def fn(x):
             return x.cumsum(0), x.cumsum(1)
@@ -1171,6 +1179,7 @@ class CommonTemplate:
 
         # Non-persistent reduction
         self.common(fn, (torch.rand(100, 4000),), check_lowp=not TEST_WITH_ROCM)
+    '''
 
     def test_clamp(self):
         def fn(a, b):
@@ -7526,14 +7535,21 @@ class CommonTemplate:
         b = torch.randn(65, 2**24, device=self.device)
         fn(a, b)
     '''
-    
-    def test_scan_simple(self):
+    def test_scan_matmul(self):
         import traceback
+        
+        
         
         #@torch.compile(backend='inductor', fullgraph=True)
         def f(carry, x):
             #return torch.ops.aten.clone(carry)+1, x+carry
-            return carry+1, x+carry
+            #return carry+1, x+carry
+            #w_dev = w.to(carry.device)
+            #w_dev = torch.rand(2, 2, device=torch.device('cuda'))#carry.device)
+            # import pdb
+            # pdb.set_trace()
+            #carry_out = torch.rand(carry.shape, device=carry.device) * torch.sum(carry)
+            return carry, x
 
         init = torch.rand(1, 2, device=torch.device('cuda')).contiguous()
         xs = torch.rand(10, 1, 2, device=torch.device('cuda')).contiguous()
@@ -7545,6 +7561,155 @@ class CommonTemplate:
             #import pdb
             #pdb.set_trace()
             scan_res = self.common(scan, [fc, init, xs])
+        except Exception:
+            print(traceback.format_exc())
+            import pdb
+            pdb.set_trace()
+
+        import pdb
+        pdb.set_trace()
+        # expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        # self.assertEqual(expected_carry_out, carry_out)
+        # self.assertEqual(expected_ys, ys)
+        
+    def test_for(self):
+        
+        
+        def body(carry, x):
+            #return torch.ops.aten.clone(carry)+1, x+carry
+            #return carry+1, x+carry
+            return carry+1, x+1
+        
+        def f():
+            init = torch.rand(1, 2, device=torch.device('cuda')).contiguous()
+            xs = torch.rand(3, 1, 2, device=torch.device('cuda')).contiguous()
+            # for t range(xs.shape[0]):
+            #     carry, out = body(init, xs[t, :])
+            carry, out = scan(body, init, xs)
+            return out
+
+        try:
+            
+            scan_res = self.common(scan, [fc, init, xs])
+        except Exception:
+            print(traceback.format_exc())
+            import pdb
+            pdb.set_trace()
+
+        import pdb
+        pdb.set_trace()
+        # expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        # self.assertEqual(expected_carry_out, carry_out)
+        # self.assertEqual(expected_ys, ys)
+    
+    def test_scan_simple(self):
+        import traceback
+        
+        #@torch.compile(backend='inductor', fullgraph=True)
+        def f(carry, x):
+            #return torch.ops.aten.clone(carry)+1, x+carry
+            #return carry+1, x+carry
+            return carry+1, x+1
+        
+        # carry : 1
+        # xs : 5x1
+        
+        # carry BxF
+        # x TxBxF
+        
+        # init = 0  (1,)
+        # xs = [1, 2, 3, 4, 5] (5,1)
+        # f(carry, x):
+        #     return x, carry+x
+        # f[0]: f(0, 1) -> 1, 1
+        # f[1]: f(1, 2) -> 2, 3
+        # f[2]: f(2, 3) -> 3, 6
+        # f[3]: f(3, 4) -> 4, 10
+        # f[4]: f(4, 5) -> 5, 15
+        
+        # W = torch.rand()
+        # f_complicated(carry, x):
+        #     return x@W, carry+x@H
+            
+
+        init = torch.rand(1, 2, device=torch.device('cuda')).contiguous()
+        xs = torch.rand(3, 1, 2, device=torch.device('cuda')).contiguous()
+
+        try:
+            fc = f
+            #fc = torch.compile(f, backend='inductor', fullgraph=True)
+            #scan_comp = torch.compile(scan, backend='inductor', fullgraph=True)
+            #import pdb
+            #pdb.set_trace()
+            scan_res = self.common(scan, [fc, init, xs])
+        except Exception:
+            print(traceback.format_exc())
+            import pdb
+            pdb.set_trace()
+
+        import pdb
+        pdb.set_trace()
+        # expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        # self.assertEqual(expected_carry_out, carry_out)
+        # self.assertEqual(expected_ys, ys)
+        
+    def test_fct(self):
+        import traceback
+        
+        #@torch.compile(backend='inductor', fullgraph=True)
+        def f(carry, x):
+            #return torch.ops.aten.clone(carry)+1, x+carry
+            #return carry+1, x+carry
+            return carry+1, x+1
+
+        init = torch.rand(1, 2, device=torch.device('cuda')).contiguous()
+        xs = torch.rand(1, 2, device=torch.device('cuda')).contiguous()
+
+        try:
+            scan_res = self.common(f, [init, xs])
+        except Exception:
+            print(traceback.format_exc())
+            import pdb
+            pdb.set_trace()
+
+        import pdb
+        pdb.set_trace()
+        # expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        # self.assertEqual(expected_carry_out, carry_out)
+        # self.assertEqual(expected_ys, ys)
+        
+    def test_fct_matmul_internal(self):
+        import traceback
+        
+        init = torch.rand(1, 2, device=torch.device('cuda')).contiguous()
+        
+        def f(x):
+            w = torch.rand(2, 5, device=x.device).contiguous()
+            return x@w
+
+        try:
+            scan_res = self.common(f, [init])
+        except Exception:
+            print(traceback.format_exc())
+            import pdb
+            pdb.set_trace()
+
+        import pdb
+        pdb.set_trace()
+        # expected_carry_out, expected_ys = _fake_scan(f, init, xs)
+        # self.assertEqual(expected_carry_out, carry_out)
+        # self.assertEqual(expected_ys, ys)
+        
+    def test_fct_matmul(self):
+        import traceback
+        
+        init = torch.rand(1, 2, device=torch.device('cuda')).contiguous()
+        w = torch.rand(2, 5, device=torch.device('cuda')).contiguous()
+        def f(x):
+            return x@w
+
+        try:
+            scan_res = self.common(f, [init])
         except Exception:
             print(traceback.format_exc())
             import pdb

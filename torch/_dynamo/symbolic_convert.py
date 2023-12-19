@@ -815,6 +815,9 @@ class InstructionTranslatorBase(Checkpointable[InstructionTranslatorGraphState])
                     and self.step()
                 ):
                     pass
+                
+                # import pdb
+                # pdb.set_trace()
             except BackendCompilerFailed:
                 raise
             except Exception as e:

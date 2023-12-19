@@ -16,6 +16,7 @@ from torch.fx.experimental.proxy_tensor import (
     make_fx,
     track_tensor_tree,
 )
+from torch._inductor.compile_fx import compile_fx
 from .cond import (
     _has_potential_branch_input_mutation, 
     _has_potential_branch_input_alias, 
@@ -67,6 +68,8 @@ def create_fw_bw_graph(f, flat_init, flat_xs):
     with suspend_functionalization():
         with disable_proxy_modes_tracing():
             def from_fun(t):
+                # import pdb
+                # pdb.set_trace()
                 if isinstance(t, torch.Tensor):
                     if t.dtype != torch.bool:
                         return torch.empty_strided(
@@ -74,6 +77,7 @@ def create_fw_bw_graph(f, flat_init, flat_xs):
                             t.stride(),
                             dtype=t.dtype,
                             requires_grad=t.requires_grad,
+                            device=t.device
                         )
                     else:
                         # clone of a functional tensor produces a functional tensor
@@ -328,6 +332,10 @@ def trace_scan(proxy_mode, func_overload, f, flat_init, flat_xs, reverse=False):
     #     isinstance(o, torch.Tensor) for o in operands
     # ), "Cond operands must be a list of tensors"
     
+    
+    # import pdb
+    # pdb.set_trace()
+    
     flat_init = [el.contiguous() for el in flat_init]
     flat_xs = [el.contiguous() for el in flat_xs]
     
@@ -342,11 +350,34 @@ def trace_scan(proxy_mode, func_overload, f, flat_init, flat_xs, reverse=False):
     out_pytrees = []
     direction = -1 if reverse else 1
 
+    # import pdb
+    # pdb.set_trace()
+    
+    # def compile_fx_wrapper(model_, example_inputs_):
+    #     nonlocal called
+    #     called = True
+    #     return compile_fx(model_, example_inputs_)
+
+    # def run(*ex, **kwargs):
+    #     return model(*ex, **kwargs)
+    
+    # fct = torch._dynamo.optimize(f, nopython=True)
+    # code = run_and_get_triton_code(fct, *(*flat_init, *flat_xs))
     with disable_proxy_modes_tracing():
         if not isinstance(body_graph, torch.fx.GraphModule):
             # FW Expects BxF, BxF
             # BW Expects BxF, BxF, BxF, BxF
-            body_graph = make_fx(_maybe_run_with_interpreter(body_graph))(*flat_init, *flat_xs)
+            # The bodt_graph is a torch.fx.graph_module.GraphModule.__new__.<locals>.GraphModuleImpl
+            body_graph = make_fx(_maybe_run_with_interpreter(body_graph), pre_dispatch=pre_dispatch)(*flat_init, *flat_xs)
+            
+            # import pdb
+            # pdb.set_trace()
+            body_graph.meta["triton"] = []
+            with open('/dccstor/nic_shared/PT2_git_22/simple_titon_code2.py', 'r') as f:
+                for line in f.readlines():
+                    body_graph.meta["triton"].append(line.replace('\n', ''))
+            # import pdb
+            # pdb.set_trace()
         
         example_outs = body_graph(*flat_init, *flat_xs)
         expanded_carries_out, expanded_outs = (example_outs[:num_init], example_outs[num_init:])
@@ -364,6 +395,7 @@ def trace_scan(proxy_mode, func_overload, f, flat_init, flat_xs, reverse=False):
 
     proxy_mode.tracer.root.register_module(next_name, body_graph)
     node_args = (body_graph, flat_init, flat_xs)
+    # node_args = ("def testfunct()", flat_init, flat_xs)
     # proxy_args = pytree.tree_map(partial(proxy_mode.tracer.unwrap_proxy, proxy_mode), node_args)
     proxy_args = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, node_args)
     out_proxy = proxy_mode.tracer.create_proxy('call_function', func_overload, proxy_args, {"reverse": reverse},
@@ -475,8 +507,10 @@ def scan_dense(f, flat_init, flat_xs, reverse=False):
     '''
     mode = _get_current_dispatch_mode()
     #assert mode is None, "Mode should never be enabled for CPU/CUDA key"
-    #import pdb
-    #pdb.set_trace()
+    #print(flat_init[0].device)
+    #print(flat_xs[0].device)
+    # import pdb
+    # pdb.set_trace()
     carry = flat_init
     carry_length = len(carry)
     out_carries = []
@@ -485,6 +519,10 @@ def scan_dense(f, flat_init, flat_xs, reverse=False):
     for inp in _unstack_and_flatten_tensors_or_lists(flat_xs)[::direction]:
         # saves the initial carry input for each iteration
         out_carries.append(carry)
+        #print(carry[0].device)
+        #print(inp[0].device)
+        # import pdb
+        # pdb.set_trace()
         flattened_out = f(*carry, *inp)
         # out_pytrees.append(flattened_out[carry_length:])
         # carry = flattened_out[:carry_length]
@@ -492,9 +530,12 @@ def scan_dense(f, flat_init, flat_xs, reverse=False):
         # out_pytrees.append(flattened_out[carry_length:].to(carry[0].device))
         # carry = flattened_out[:carry_length].to(carry[0].device)
         out_pytrees.append(tuple([el.to(carry[0].device) for el in flattened_out[carry_length:]]))
-        carry = tuple([el.to(carry[0].device) for el in flattened_out[:carry_length]])
-        # import pdb
-        # pdb.set_trace()
+        try:
+            carry = tuple([el.to(carry[0].device) for el in flattened_out[:carry_length]])
+        except:
+            print('Failed!')
+            import pdb
+            pdb.set_trace()
 
     out_carries.append(carry)
     ys = _stack_pytree(out_pytrees[::direction])
@@ -516,9 +557,13 @@ def scan_autograd(f, flat_init, flat_xs, reverse=False):
 def scan_proxy_torch_dispatch_mode(mode, f, flat_init, flat_xs, reverse=False):
     if mode.enable_tracing:
         ret = trace_scan(mode, scan_impl, f, flat_init, flat_xs, reverse=reverse)
+        # import pdb
+        # pdb.set_trace()
         return ret
     else:
         ret = scan_impl(f, flat_init, flat_xs, reverse=reverse)
+        # import pdb
+        # pdb.set_trace()
         return ret
 
 @scan_impl.py_impl(FakeTensorMode)

@@ -87,6 +87,8 @@ def check_codegen(
         _check_has_dynamic_shape(self, code)
     else:
         code = run_and_get_triton_code(run, *example_inputs, **kwargs)
+        import pdb
+        pdb.set_trace()
         triton_kernel_found = False
         lines = code.split("\n")
         for line in lines:

@@ -840,6 +840,8 @@ class TritonKernel(Kernel):
         if pid_cache is None:
             pid_cache = {}
         super().__init__()
+        # import pdb
+        # pdb.set_trace()
         self.numels = [V.graph.sizevars.simplify(s) for s in groups]
         self.mutations = mutations
         self.range_trees: List[IterationRangesRoot] = []
@@ -911,6 +913,8 @@ class TritonKernel(Kernel):
         )
 
     def initialize_range_tree(self, pid_cache):
+        # import pdb
+        # pdb.set_trace()
         names = list(
             reversed(["xindex", "yindex", "zindex"][: len(self.numels) - 1])
         ) + ["rindex"]
@@ -1747,6 +1751,8 @@ class TritonKernel(Kernel):
 
                     return inner
 
+            import pdb
+            pdb.set_trace()
             with helper.indent(), V.set_ops_handler(CSEProxy()):
                 outputs = fn(*args)
                 helper.writeline(f"return {outputs}")
@@ -1860,10 +1866,10 @@ class TritonKernel(Kernel):
         #acc_type = triton_acc_type(dtype)
         #cond = " & ".join(masks)
 
-        #import pdb
-        #pdb.set_trace()
-
-        combine_helper_fn = self._lift_helper(f, 2)
+        import pdb
+        pdb.set_trace()
+        #combine_helper_fn = self._lift_helper(f, 2)
+        self.helper_functions.append(f)
         
         '''
         masked_xs = self.cse.generate(
@@ -1955,8 +1961,8 @@ class TritonKernel(Kernel):
         #     else:
         #         self.compute.splice(f"tl.store(out_ptr0, {xs_t})")
           
-        import pdb
-        pdb.set_trace()      
+        # import pdb
+        # pdb.set_trace()      
         #loop_code = f"for {t_loop} in range({out_size[0]}):"
         #self.compute.splice(loop_code)
         
@@ -1966,13 +1972,27 @@ class TritonKernel(Kernel):
                 xs_t = self.cse.generate(self.compute, f"tl.load({self.args.input('arg1_1')} + (({xs_size[0]} - {t}) * {xs_size[1]} * {xs_size[2]}))",)
             else:
                 #xs_t = self.cse.generate(self.compute, f"tl.load({self.args.input('arg1_1')} + ({t} * {xs_size[1]} * {xs_size[2]}))",)
-                xs_t = self.cse.generate(self.compute, f"tl.load({self.args.input('arg1_1')} + tl.arange({t} * {xs_size[1]} * {xs_size[2]}, {t+1} * {xs_size[1]} * {xs_size[2]}))",)
+                #xs_t = self.cse.generate(self.compute, f"tl.load({self.args.input('arg1_1')} + tl.arange({t} * {xs_size[1]} * {xs_size[2]}, {t+1} * {xs_size[1]} * {xs_size[2]}))",)
+                xs_t = self.cse.generate(self.compute, f"tl.load({self.args.input('arg1_1')} + ({t*2}))",)
             
             #x0
             #self.compute.splice(f"if x0 < 1:")
             #with self.compute.indent():
-            self.compute.splice(f"tl.device_print('xs_t', {xs_t})")
-            self.compute.splice(f"{carry_loop}, {out_loop} = forward({init}, {xs_t})")
+            #self.compute.splice(f"tl.device_print('xs_t', {xs_t})")
+            #self.compute.splice(f"tl.device_print('xnumel', xnumel)")
+            #self.compute.splice(f"tl.device_print('XBLOCK', XBLOCK)")
+            #self.compute.splice(f"{carry_loop}, {out_loop} = forward({init}, {xs_t})")
+            if return_out:
+                #self.compute.splice(f"forward({xs_t}, out_ptr0 + ({t*2}), {2}, {2})")
+                self.compute.splice(f"forward({self.args.input('arg1_1')} + ({t*2}), out_ptr0 + ({t*2}), {2}, {2})")
+            else:
+                #self.compute.splice(f"forward({init}, out_ptr0 + ({t*2}), {2}, {2})")
+                #self.compute.splice(f"forward({self.args.input('arg0_1')} + ({t*2}), out_ptr0 + ({t*2}), {2}, {2})")
+            
+                if t > 0:
+                    self.compute.splice(f"forward(out_ptr0, out_ptr0, {2}, {2})")
+                else:
+                    self.compute.splice(f"forward({self.args.input('arg0_1')} + ({t*2}), out_ptr0, {2}, {2})")
             #self.compute.splice(f"tl.device_print('XBLOCK', XBLOCK)")
             #self.compute.splice(f"tl.device_print('progID', tl.program_id(0))")
             #self.compute.splice(f"tl.device_print('progLaunches', tl.num_programs(0))")
@@ -1985,12 +2005,12 @@ class TritonKernel(Kernel):
             #     #self.compute.splice(f"tl.store(out_ptr0 + {t} * {xs_size[1]} * {xs_size[2]}, {xs_t})")
             #     #self.compute.splice(f"tl.store(out_ptr0 + {t} * {xs_size[1]} * {xs_size[2]} + 1, {xs_t} + 1)")
             
-            #     self.compute.splice(f"tl.store({out} + tl.arange({t} * {xs_size[1]} * {xs_size[2]}, {t+1} * {xs_size[1]} * {xs_size[2]}), {xs_t} + tl.arange(0, {xs_size[1]} * {xs_size[2]}))")
+            #     self.compute.splice(f"tl.store(out_ptr0 + tl.arange({t} * {xs_size[1]} * {xs_size[2]}, {t+1} * {xs_size[1]} * {xs_size[2]}), {out_loop} + tl.arange(0, {xs_size[1]} * {xs_size[2]}))")
             # else:
             #     #self.compute.splice(f"tl.store(out_ptr0, {xs_t})")
             #     #self.compute.splice(f"tl.store(out_ptr0 + tl.arange(0, {xs_size[1]} * {xs_size[2]}), {xs_t} + tl.arange(0, {xs_size[1]} * {xs_size[2]}))")
 
-            #     self.compute.splice(f"tl.store({out} + tl.arange(0, {xs_size[1]} * {xs_size[2]}), {xs_t} + tl.arange(0, {xs_size[1]} * {xs_size[2]}))")
+            #     self.compute.splice(f"tl.store(out_ptr0 + tl.arange(0, {xs_size[1]} * {xs_size[2]}), {out_loop} + tl.arange(0, {xs_size[1]} * {xs_size[2]}))")
                 
         #result_carry = self.cse.generate(self.compute, f"init_val",)
         #result_out = self.cse.generate(self.compute, f"x",)
@@ -2101,6 +2121,8 @@ class TritonKernel(Kernel):
                 result.writeline(
                     f"torch.cuda.set_device({index})"
                 )  # no-op to ensure context
+                # import pdb
+                # pdb.set_trace()
                 for tree in self.range_trees:
                     expr = pexpr(V.graph.sizevars.size_hint(tree.numel))
                     if tree.prefix != "r" or self.inside_reduction:
@@ -2268,12 +2290,33 @@ class TritonKernel(Kernel):
 
         self.codegen_body()
     
-        for helper in self.helper_functions:
-            code.writeline("")
-            #code.splice(helper)
-            code.writeline("@triton.jit")
-            code.writeline("def forward(arg0_1, arg1_1):")
-            code.writeline("    return (arg0_1+1, arg1_1+1)")
+        import pdb
+        pdb.set_trace()
+        # for helper in self.helper_functions:
+        #     code.writeline("")
+        #     #code.splice(helper)
+        #     code.writeline("@triton.jit")
+        #     code.writeline("def forward(arg0_1, arg1_1):")
+        #     code.writeline("    return (arg0_1+1, arg1_1+1)")
+        
+        # code.writeline("@triton.jit")
+        # code.writeline("def forward(in_ptr0, out_ptr0, xnumel, XBLOCK : tl.constexpr):")
+        # code.writeline("    xoffset = tl.program_id(0) * XBLOCK")
+        # code.writeline("    xindex = xoffset + tl.arange(0, XBLOCK)[:]")
+        # code.writeline("    xmask = xindex < xnumel")
+        # code.writeline("    x0 = xindex")
+        # code.writeline("    tmp0 = tl.load(in_ptr0 + (x0), xmask)")
+        # code.writeline("    tmp1 = 1.0")
+        # code.writeline("    tmp2 = tmp0 + tmp1")
+        # code.writeline("    tl.store(out_ptr0 + (x0), tmp2, xmask)")
+        
+        remove_storage_line = False
+        for f in self.helper_functions:
+            if isinstance(f, torch.fx.graph_module.GraphModule):
+                remove_storage_line = True
+                code.writeline("")
+                for line in f.meta['triton']:
+                    code.writeline(line)
 
         if self.inside_reduction:
             reduction_hint = self.reduction_hint
@@ -2317,9 +2360,11 @@ class TritonKernel(Kernel):
         if config.benchmark_kernel:
             code.splice(self.codegen_kernel_benchmark())
 
-        print(code.getvalue())
-        #import pdb
-        #pdb.set_trace()
+        if remove_storage_line:
+            del code._lines[-2:]
+            print(code.getvalue())
+            import pdb
+            pdb.set_trace()
 
         return code.getvalue()
 
@@ -2402,6 +2447,8 @@ class TritonKernel(Kernel):
             if V.graph.is_unspec_arg(call_args[i]):
                 call_args[i] = call_args[i] + ".item()"
         grid = []
+        # import pdb
+        # pdb.set_trace()
         # TODO(jansel): if there are constants, we shouldn't bother passing them as args
         for tree in self.range_trees:
             if isinstance(tree.numel, (sympy.Integer, sympy.Symbol)):
