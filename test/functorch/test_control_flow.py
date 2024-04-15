@@ -61,6 +61,10 @@ def _while_loop_tests():
     def simple(x):
         def cond_fn(x):
             return x.sum() < 10
+            # try:
+            #     return x.sum() < 10
+            # except:
+            #     return x.sum() < 10
 
         def body_fn(x):
             return (x + 1,)
@@ -315,6 +319,32 @@ class TestControlFlow(TestCase):
         fake_outs = fwbw(_fake_map, f, x, y)
         self.assertEqual(true_outs, fake_outs)
 
+    # def test_while_loop_autograd(self):
+    #     import torch.utils._pytree as pytree
+        
+    #     def cond_fn(x):
+    #         return x.sum() < 3
+
+    #     def body_fn(x):
+    #         #return (x+1,)
+    #         return (1+x,)
+        
+    #     def body_grad_fn(num_operands, *xs):
+    #         x_val = xs[:num_operands]
+    #         x_grad = xs[num_operands:2*num_operands]
+    #         return tuple([2*g for g in x_grad])
+        
+    #     def fwbw(wh_op, cf, bf, x):
+    #         z = wh_op(cf, bf, x)
+    #         flat_x = pytree.tree_leaves(x)
+    #         flat_z = pytree.tree_leaves(z)
+    #         grads = torch.autograd.grad(flat_z, flat_x, [torch.ones_like(z) for z in flat_z])
+    #         return z, grads
+
+    #     x = torch.ones(1, requires_grad=True)
+    #     actual_out, actual_grad = fwbw(while_loop, cond_fn, body_fn, (x, ))
+    #     expected, expected_grad = fwbw(_fake_while_loop, cond_fn, body_fn, (x, ))
+    #     self.assertEqual(expected, actual_out)
 
 @unittest.skipIf(IS_WINDOWS, "Windows not supported for this test")
 @skipIfNoDynamoSupport

@@ -234,9 +234,9 @@ class WhileLoopAutogradOp(torch.autograd.Function):
         # )
         #grads = while_loop_impl(ctx._cond_fn, ctx._fw_graph, [fw_outs, flat_grads])
         grads = while_loop_impl(ctx._cond_fn, 
-                                ctx._fw_graph,
+                                #ctx._fw_graph,
                                 ctx._joint_graph,
-                                ctx._num_operands,
+                                #ctx._num_operands,
                                 fw_operands + fw_outs + flat_grads,
                                 #fw_operands
                                 #fw_outs + flat_grads
