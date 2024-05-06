@@ -159,7 +159,7 @@ def _get_current_dispatch_mode_stack():
     return [_get_dispatch_stack_at(i) for i in range(stack_len)]
 
 
-def _push_mode(mode):
+def _push_mode(mode: TorchDispatchMode):
     k = mode._dispatch_key if hasattr(mode, "_dispatch_key") else None
     assert k is None or k == torch._C.DispatchKey.PreDispatch
     if k is None:
@@ -534,7 +534,7 @@ def return_and_correct_aliasing(func, args, kwargs, out):
         return None
 
     def get_arg_from_alias(output_alias, schema_info, args, kwargs):
-        new_args, new_kwargs = torch.fx.operator_schemas.normalize_function(
+        new_args, new_kwargs = torch.fx.operator_schemas.normalize_function(  # type: ignore[misc]
             func, args=args, kwargs=kwargs
         )
 
