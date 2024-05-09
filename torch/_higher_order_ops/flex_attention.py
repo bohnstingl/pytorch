@@ -208,7 +208,7 @@ def flex_attention_proxy_torch_dispatch_mode(
 
 @flex_attention.py_functionalize_impl
 def flex_attention_functionalize(
-    ctx: torch._subclasses.functional_tensor.BaseFunctionalizeAPI,
+    ctx,#: torch._subclasses.functional_tensor.BaseFunctionalizeAPI,
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
