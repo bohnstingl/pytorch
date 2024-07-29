@@ -1,4 +1,5 @@
 # mypy: allow-untyped-defs
+import contextlib
 import functools
 import itertools
 from typing import Callable, List, Tuple
@@ -14,18 +15,55 @@ from torch._higher_order_ops.utils import (
     reenter_make_fx,
     unique_graph_id,
 )
-
+from torch._dispatch.python import suspend_functionalization
+from torch._guards import detect_fake_mode
 from torch._ops import HigherOrderOperator
 from torch._subclasses.fake_tensor import FakeTensorMode
+from torch._subclasses.functional_tensor import disable_functional_mode
 from torch.fx.experimental.proxy_tensor import (
     disable_proxy_modes_tracing,
     ProxyTorchDispatchMode,
     track_tensor_tree,
 )
+from torch.utils._python_dispatch import _get_current_dispatch_mode
+from .utils import _from_fun, create_fw_bw_graph
 
 
 aten = torch._ops.ops.aten
 
+def create_fw_bw_graph_combinefn(combine_fn, dim, *operands):
+    # See Note [HOP create fw_bw graph] in create_fw_bw_graph in utils.py
+
+    with suspend_functionalization(), disable_functional_mode():
+        with disable_proxy_modes_tracing():
+            # fw_inputs = pytree.tree_map(_from_fun, operands)
+            
+            fw_inputs = [
+                # pytree.tree_map(_from_fun, x[slice_along_axis(0, 1, stride=None, dim=dim)])
+                # pytree.tree_map(_from_fun, x)[slice_along_axis(0, 1, stride=None, dim=dim)]
+                pytree.tree_map(_from_fun, x)
+                for x in itertools.chain(operands, operands)
+            ]
+
+            fw_outputs_true = pytree.tree_map(_from_fun, combine_fn(*fw_inputs, *()))
+            if any(
+                not isinstance(out, torch.Tensor)
+                for out in fw_outputs_true
+                if out is not None
+            ):
+                raise RuntimeError(
+                    "Expect outputs of true_fn to only contains tensors or None. "
+                    f"Got types {[type(out) for out in fw_outputs_true]}."
+                )
+
+            # TODO: There is a major issue that the create_fw_bw in the higher_order_op is invoked twice:
+            # Once in the forward path (as it should) and once in the backward path, where it shouldn't be called
+            # If we can get rid of the second invokation, it would simplify this function
+            fw_graph, joint_graph = create_fw_bw_graph(
+                combine_fn, False, (*fw_inputs, *()), fw_outputs_true
+            )
+
+        return fw_graph, joint_graph
 
 def wrap_combine_fn_flat(*args, combine_fn, spec, num_leaves):
     if len(args) != 2 * num_leaves:
@@ -235,7 +273,12 @@ def generic_associative_scan(operator, elems_flat, dim=0, lifted_args=()):
             safe_map(functools.partial(_interleave, dim=dim), even_elems, odd_elems)
         )
 
-    scans = _scan(elems_flat)
+    # scans = _scan(elems_flat)
+    
+    # TODO: With this, the requires_grad=True for the results
+    # scans = elems_flat
+    # TODO: With this, the requires_grad=False for the results
+    scans = operator(*elems_flat, *elems_flat, *())
 
     return scans
 
@@ -264,6 +307,22 @@ def trace_associative_scan(
             for x in itertools.chain(input, input)
         ]
         combine_graph = reenter_make_fx(combine_fn)(*sample_inputs, *lifted_args)
+        
+    # sample_inputs = [
+    #     x[slice_along_axis(0, 1, stride=None, dim=dim)]
+    #     for x in itertools.chain(input, input)
+    # ]
+    # sample_inputs = [
+    #     torch.empty_like(
+    #         x,
+    #         # x[slice_along_axis(0, 1, stride=None, dim=dim)],
+    #         dtype=x.dtype,
+    #         device=x.device,
+    #         requires_grad=x.requires_grad,
+    #     )
+    #     for x in itertools.chain(input, input)
+    # ]
+    # combine_graph = reenter_make_fx(combine_fn)(*sample_inputs, *lifted_args)
 
     outputs = None
     for node in combine_graph.graph.nodes:
@@ -301,26 +360,97 @@ def trace_associative_scan(
     with disable_proxy_modes_tracing():
         out = [aten.clone(x) for x in input]
 
+    # # TODO: the unbacked symbol allocations MUST NOT leak out, if you want to
+    # # support this we need to arrange for the reenter_make_fx unbacked SymInts
+    # # to be used, AND we need to arrange for some sort of unification between
+    # # the two branches (but not really unification; e.g., if one branch
+    # # returns [u0] and the other returns [5] this is OK but you MUST NOT
+    # # conclude the result is 5.  Also if one branch returns [3] and another
+    # # branch returns [5] you can make it work by immediately allocating a new
+    # # unbacked SymInt here).
+    # ignore_fresh_unbacked = contextlib.nullcontext()
+    # if (fake_mode := detect_fake_mode()) and fake_mode.shape_env:
+    #     ignore_fresh_unbacked = fake_mode.shape_env.ignore_fresh_unbacked_symbols()
+
+    # with ignore_fresh_unbacked:
+    #     out = combine_fn(*sample_inputs, *lifted_args)
+
     return track_tensor_tree(out, out_proxy, constant=None, tracer=proxy_mode.tracer)
 
+class AssociativeScanAutograd(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        fw_true_graph,
+        joint_true_graph,
+        dim,
+        spec,
+        num_leaves,
+        *input,
+        # lifted_args,
+    ):
+        ctx._dim = dim
+        ctx._fw_true_graph = fw_true_graph
+        ctx._joint_true_graph = joint_true_graph
+        # ctx._lifted_args = lifted_args
+        ctx.save_for_backward(*input)
+
+        # TODO: This does not work
+        fw_true_graph_wrapped = functools.partial(
+            wrap_combine_fn_flat, combine_fn=fw_true_graph, spec=spec, num_leaves=num_leaves
+        )
+        
+        with torch._C._AutoDispatchBelowAutograd():
+            return associative_scan_op(fw_true_graph_wrapped, input, dim, ())#, lifted_args)
+
+    @staticmethod
+    def backward(ctx, *flat_grads):
+        input = ctx.saved_tensors
+
+        # TODO: Compute gradients
+        return None, None, None, None, None, *grads
 
 @associative_scan_op.py_impl(DispatchKey.CompositeExplicitAutograd)
 def associative_scan_op_dense(combine_fn, input, dim, lifted_args):
+    mode = _get_current_dispatch_mode()
+    assert mode is None, "Mode should never be enabled for CPU/CUDA key"
     return generic_associative_scan(combine_fn, input, dim, lifted_args)
 
 
-# @associative_scan_op.py_impl(DispatchKey.CompositeExplicitAutograd)
-# def associative_scan_op_dense(combine_fn, input, dim):
-#     raise NotImplementedError("associative_scan is not implemented for eager")
-
-
-associative_scan_op.py_impl(DispatchKey.Autograd)(
-    autograd_not_implemented(associative_scan_op, deferred_error=True)
-)
-
-# @associative_scan_op.py_impl(DispatchKey.Autograd)
-# def associative_scan_op_autograd(combine_fn, input, dim):
-#     return generic_associative_scan(combine_fn, input, dim)
+@associative_scan_op.py_impl(DispatchKey.Autograd)
+def associative_scan_op_autograd(combine_fn, input, dim, lifted_args):
+    # A shortcut for the case where all inputs don't require gradient,
+    # we skip tracing the forward and backward graph.
+    if pytree.tree_all_only(
+        torch.Tensor,
+        lambda t: not t.requires_grad,
+        (input),
+    ):
+        with torch._C._AutoDispatchBelowAutograd():
+            return associative_scan_op(combine_fn, input, dim, lifted_args)
+    (
+        fw_true_graph,
+        joint_true_graph,
+    # ) = create_fw_bw_graph_combinefn(combine_fn, dim, *input)#ifted_args)
+    ) = create_fw_bw_graph_combinefn(combine_fn.keywords['combine_fn'], dim, *input)#ifted_args)
+    
+    # TODO: This does not work
+    fw_true_graph_wrapped = functools.partial(
+        wrap_combine_fn_flat, combine_fn=fw_true_graph, spec=combine_fn.keywords['spec'], num_leaves=combine_fn.keywords['num_leaves']
+    )
+    flat_out = AssociativeScanAutograd.apply(
+        # fw_true_graph_wrapped,
+        fw_true_graph,
+        # combine_fn,
+        # combine_fn.keywords['combine_fn'],
+        joint_true_graph,
+        dim,
+        combine_fn.keywords['spec'],
+        combine_fn.keywords['num_leaves'],
+        *input,
+        # lifted_args
+    )
+    return flat_out
 
 
 @associative_scan_op.py_impl(ProxyTorchDispatchMode)
@@ -346,8 +476,9 @@ def associative_scan_functionalize(ctx, combine_fn, input, dim, lifted_args):
     unwrapped_input = ctx.unwrap_tensors(input)
     unwrapped_lifted_args = ctx.unwrap_tensors(lifted_args)
     with ctx.redispatch_to_next() as m:
+        functional_combine_fn = ctx.functionalize(combine_fn)
         ret = associative_scan_op(
-            combine_fn, unwrapped_input, dim, unwrapped_lifted_args
+            functional_combine_fn, unwrapped_input, dim, unwrapped_lifted_args
         )
     return ctx.wrap_tensors(ret)
 
