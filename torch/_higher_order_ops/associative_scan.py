@@ -278,7 +278,8 @@ def generic_associative_scan(operator, elems_flat, dim=0, lifted_args=()):
     # TODO: With this, the requires_grad=True for the results
     # scans = elems_flat
     # TODO: With this, the requires_grad=False for the results
-    scans = operator(*elems_flat, *elems_flat, *())
+    # scans = operator(*elems_flat, *elems_flat, *())
+    scans = operator(*elems_flat, *elems_flat)
 
     return scans
 
@@ -384,8 +385,6 @@ class AssociativeScanAutograd(torch.autograd.Function):
         fw_true_graph,
         joint_true_graph,
         dim,
-        spec,
-        num_leaves,
         *input,
         # lifted_args,
     ):
@@ -395,13 +394,8 @@ class AssociativeScanAutograd(torch.autograd.Function):
         # ctx._lifted_args = lifted_args
         ctx.save_for_backward(*input)
 
-        # TODO: This does not work
-        fw_true_graph_wrapped = functools.partial(
-            wrap_combine_fn_flat, combine_fn=fw_true_graph, spec=spec, num_leaves=num_leaves
-        )
-        
         with torch._C._AutoDispatchBelowAutograd():
-            return associative_scan_op(fw_true_graph_wrapped, input, dim, ())#, lifted_args)
+            return associative_scan_op(fw_true_graph, input, dim, ())#, lifted_args)
 
     @staticmethod
     def backward(ctx, *flat_grads):
@@ -428,25 +422,24 @@ def associative_scan_op_autograd(combine_fn, input, dim, lifted_args):
     ):
         with torch._C._AutoDispatchBelowAutograd():
             return associative_scan_op(combine_fn, input, dim, lifted_args)
+        
     (
         fw_true_graph,
         joint_true_graph,
-    # ) = create_fw_bw_graph_combinefn(combine_fn, dim, *input)#ifted_args)
-    ) = create_fw_bw_graph_combinefn(combine_fn.keywords['combine_fn'], dim, *input)#ifted_args)
+    # TODO: When creating the graph like this, there are NO gradients
+    ) = create_fw_bw_graph_combinefn(combine_fn, dim, *input)#lifted_args)
+    # TODO: When creating the graph like this, there are gradients
+    # ) = create_fw_bw_graph_combinefn(combine_fn.keywords['combine_fn'], dim, *input)#lifted_args)
     
-    # TODO: This does not work
-    fw_true_graph_wrapped = functools.partial(
-        wrap_combine_fn_flat, combine_fn=fw_true_graph, spec=combine_fn.keywords['spec'], num_leaves=combine_fn.keywords['num_leaves']
-    )
+    # TODO: Wrapping the function after creating the graph does also not help
+    # fw_true_graph_wrapped = functools.partial(
+    #     wrap_combine_fn_flat, combine_fn=fw_true_graph, spec=combine_fn.keywords['spec'], num_leaves=combine_fn.keywords['num_leaves']
+    # )
     flat_out = AssociativeScanAutograd.apply(
         # fw_true_graph_wrapped,
         fw_true_graph,
-        # combine_fn,
-        # combine_fn.keywords['combine_fn'],
         joint_true_graph,
         dim,
-        combine_fn.keywords['spec'],
-        combine_fn.keywords['num_leaves'],
         *input,
         # lifted_args
     )
