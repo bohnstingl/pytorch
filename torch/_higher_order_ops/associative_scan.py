@@ -728,59 +728,34 @@ class AssociativeScanAutograd(torch.autograd.Function):
             num_elems = input[0].size()[dim]
             num_leaves = len(outs)
             
-            # inp_flipped = [torch.flip(inp, [dim])[:-1] for inp in input]
             inp_flipped = [torch.flip(inp, [dim])[slice_along_axis(0, -1, dim=dim)] for inp in input]
             ones_inp = [torch.ones_like(inp[slice_along_axis(0, 1, dim=dim)]) for inp in input]
             zeros_inp = [torch.zeros_like(inp[slice_along_axis(0, 1, dim=dim)]) for inp in input]
-            # out_flipped = [torch.flip(out, [dim])[1:] for out in outs]
             out_flipped = [torch.flip(out, [dim])[slice_along_axis(1, None, dim=dim)] for out in outs]
             
-            inp_flipped_mapped = pytree.tree_unflatten(inp_flipped, spec)
-            ones_inp_mapped = pytree.tree_unflatten(ones_inp, spec)
-            zeros_inp_mapped = pytree.tree_unflatten(zeros_inp, spec)
-            out_flipped_mapped = pytree.tree_unflatten(out_flipped, spec)
-            # helpers = [joint_true_graph(ones_inp_mapped, x, z) for x, z in zip(inp_flipped_mapped, out_flipped_mapped)]
-            # helpers = joint_true_graph(*ones_inp_mapped, *inp_flipped_mapped, *out_flipped_mapped)
             helpers = joint_true_graph(*ones_inp, *inp_flipped, *out_flipped)
-            
-            
-            # # helpers = [joint_true_graph(torch.ones_like(input[0][slice_along_axis(0, 1, dim=dim)]), x, z) for x, z in zip(torch.flip(input[0], [dim])[:-1], torch.flip(outs[0], [dim])[1:])]
-            # # helper1 = [[h[0] for h in h_tree] for h_tree in helpers]
-            # # helper1 = [h_tree[0] for h_tree in helpers]
-            # helper1 = helpers[0:num_leaves]
-            # # helper1.append(torch.ones_like(input[0][slice_along_axis(0, 1, dim=dim)]))
-            # helper1.append(ones_inp_mapped)
-            # helper1 = torch.concat(helper1, dim)
-            
-            helper1 = [torch.concat([h, o], dim) for h, o in zip(helpers[0:num_leaves], ones_inp)]
-            
-            # # helper2 = [torch.ones_like(input[0][slice_along_axis(0, 1, dim=dim)])]
-            # helper2 = [ones_inp_mapped]
-            # # helper2.extend([[h[1] for h in h_tree] for h_tree in helpers])
-            # # helper2.extend([h_tree[1] for h_tree in helpers])
-            # helper2.extend(helpers[num_leaves:])
-            # helper2 = torch.concat(helper2, dim)
+            helper1 = torch.stack([torch.concat([h, o], dim) for h, o in zip(helpers[0:num_leaves], ones_inp)], 0)
             helper2 = [torch.concat([o, h], dim) for h, o in zip(helpers[num_leaves:], ones_inp)]
             
-            # helper_mats = []
-            helper_mats = [torch.unsqueeze(torch.concat([o] + [torch.cumprod(h[slice_along_axis(1, None, dim=dim)], dim)], dim), 0) for h, o, z in zip(helper2, ones_inp, zeros_inp)]
-            for n in range(1, num_elems):
-                # row = [torch.zeros_like(input[0][slice_along_axis(0, 1, dim=dim)])] * n + [torch.ones_like(input[0][slice_along_axis(0, 1, dim=dim)])]
-                # row = [zeros_inp_mapped] * n + [ones_inp_mapped]
-                # row.append(torch.cumprod(helper2[slice_along_axis(n+1, None, dim=dim)], dim))
-                # row.append(pytree.tree_flatten(torch.cumprod(pytree.tree_unflatten([h[slice_along_axis(n+1, None, dim=dim)] for h in helper2], spec), dim)))
-                # row = [torch.concat([z] * n + [o] + [torch.cumprod(h[slice_along_axis(n+1, None, dim=dim)], dim)], dim) for h, o, z in zip(helper2, ones_inp, zeros_inp)]
-                row = [torch.concat([z] * n + [o] + [torch.cumprod(h[slice_along_axis(n+1, None, dim=dim)], dim)], dim) for h, o, z in zip(helper2, ones_inp, zeros_inp)]
-                helper_mats = [torch.concat((hm, torch.unsqueeze(r, 0)), 0) for hm, r in zip(helper_mats, row)]
-                # row = torch.concat(row, dim)
-                # helper_mat.append(row)
-                
-            # helper_mat = torch.stack(helper_mat, 0)
+            # helper_mats = [torch.unsqueeze(torch.concat([o] + [torch.cumprod(h[slice_along_axis(1, None, dim=dim)], dim)], dim), 0) for h, o, z in zip(helper2, ones_inp, zeros_inp)]
+            helper_mats = torch.unsqueeze(torch.stack([torch.concat([z] * (num_elems-1) + [o], dim) for o, z in zip(ones_inp, zeros_inp)], 0), 0)
+            # for n in range(1, num_elems):
+            for n in range(num_elems-1, 0, -1):
+                #row = [torch.concat([z] * n + [o] + [torch.cumprod(h[slice_along_axis(n+1, None, dim=dim)], dim)], dim) for h, o, z in zip(helper2, ones_inp, zeros_inp)]
+                row = torch.stack([hm * h2 for hm, h2 in zip(helper_mats[0], [h[slice_along_axis(n, n+1, dim=dim)] for h in helper2])], 0)
+                row += torch.stack([torch.concat([z] * (n-1) + [o] + [z] * (num_elems - n), dim) for o, z in zip(ones_inp, zeros_inp)], 0)
+                # helper_mats = [torch.concat((hm, torch.unsqueeze(r, 0)), 0) for hm, r in zip(helper_mats, row)]
+                helper_mats = torch.concat((torch.unsqueeze(row, 0), helper_mats), 0)
             
-            grads = [torch.flip(torch.sum(h * hm, 0), [dim]) for h, hm in zip(helper1, helper_mats)]
+            # grads = [torch.flip(torch.sum(h * hm, 0), [dim]) for h, hm in zip(helper1, helper_mats)]
+            grads = torch.split(torch.flip(torch.sum(helper1 * helper_mats, 0), [dim+1]), 1, 0)
+            # grads = torch.split(torch.sum(helper1 * helper_mats, 0), 1, 0)
+            grads = [torch.squeeze(g, 0) for g in grads]
+            grads = pytree.tree_unflatten(grads, spec)
             print(grads)
             
-            return outs, grads
+            # return outs, pytree.tree_unflatten(grads, spec)
+            return outs, pytree.tree_unflatten(grads, spec)
 
     @staticmethod
     def backward(ctx, *flat_grads):

@@ -2871,13 +2871,38 @@ class <lambda>(torch.nn.Module):
             expected_result = _fake_associative_scan(add, x, 0, reverse=direction)
             self.assertEqual(result, expected_result)
             self.assertEqual(result_comp, expected_result)
-
-    def test_generic_associative_scan_autograd(self):
+            
+    def test_generic_associative_scan_12autograd(self):
         def add(x: torch.Tensor, y: torch.Tensor):
             return x + y
+        
+        def mul(x: torch.Tensor, y: torch.Tensor):
+            return x * y
+        
+        def mult(x: torch.Tensor, y: torch.Tensor):
+            return x[0] * y[0], x[1] * y[1]
+        
+        def mul2(x: torch.Tensor, y: torch.Tensor):
+            return x**0.5 * y + y**0.5 * x
+        
+        def mul2t(x: torch.Tensor, y: torch.Tensor):
+            return x[0]**0.5 * y[0] + y[0]**0.5 * x[0], y[1] * x[1]
+        
+        def matmul(x: torch.Tensor, y: torch.Tensor):
+            W =  torch.randn(4, 4)
+            return x @ W + y @ W
 
         # x = torch.randn(3, 2, 2, requires_grad=True)
         x = torch.arange(1, 5, requires_grad=True, dtype=torch.float)
+        # x = torch.tile(torch.unsqueeze(x, 0), (2, 1))
+        
+        # x = torch.tile(torch.unsqueeze(torch.unsqueeze(x, 1), 0), (4, 1, 4))
+        
+        # x = torch.arange(1, 5, requires_grad=False, dtype=torch.float)
+
+        inp = x
+
+        inp = (x, x)
 
         torch.compiler.reset()
         with torch._dynamo.utils.disable_cache_limit():
@@ -2885,7 +2910,34 @@ class <lambda>(torch.nn.Module):
             associative_scan2 = associative_scan
 
         for direction in [False, True]:
-            result1 = associative_scan1(add, x, 0, generic_scan=True, reverse=direction)
+            expected_result = _fake_associative_scan(mult, inp, 0, reverse=False)
+            # grad_out = torch.ones_like(expected_result)
+            expected_result_flat, _ = pytree.tree_flatten(expected_result)
+            grad_out = [torch.ones_like(el) for el in expected_result_flat]
+            expected_grads = torch.autograd.grad(expected_result_flat, (x,), grad_out)
+            print(expected_grads)
+            
+            # result1 = associative_scan1(add, x, 0, generic_scan=False, reverse=direction)
+            result2, grads2 = associative_scan2(mult, inp, 0, generic_scan=False, reverse=direction)
+            
+            # self.assertEqual(result1, expected_result)
+            self.assertEqual(result2, expected_result)
+
+    def test_generic_associative_scan_11autograd(self):
+        def add(x: torch.Tensor, y: torch.Tensor):
+            return x + y
+
+        # x = torch.randn(3, 2, 2, requires_grad=True)
+        # x = torch.arange(1, 5, requires_grad=True, dtype=torch.float)
+        x = torch.arange(1, 5, requires_grad=False, dtype=torch.float)
+
+        torch.compiler.reset()
+        with torch._dynamo.utils.disable_cache_limit():
+            associative_scan1 = torch.compile(associative_scan, fullgraph=True)
+            associative_scan2 = associative_scan
+
+        for direction in [False, True]:
+            # result1 = associative_scan1(add, x, 0, generic_scan=False, reverse=direction)
             result2 = associative_scan2(add, x, 0, generic_scan=True, reverse=direction)
             expected_result = _fake_associative_scan(add, x, 0, reverse=direction)
             self.assertEqual(result1, expected_result)
