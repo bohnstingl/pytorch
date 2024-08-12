@@ -6206,8 +6206,13 @@ def while_loop(cond_fn, body_fn, carried_inputs, additional_inputs):
 
 
 @register_lowering(associative_scan_op, type_promotion_kind=None)
-def associative_scan(combine_fn: ir.Subgraph, input, dim: int):
+def associative_scan(combine_fn: ir.Subgraph, input, dim: int, lifted_args: Tuple):
     from .subgraph_lowering import InputDescriptor, lower_pointwise_subgraph
+
+    if len(lifted_args) > 0:
+        raise RuntimeError(
+            "Lifted arguments are not supported for lowered associative_scan"
+        )
 
     subgraph_inputs = [
         InputDescriptor(dtype=x.get_dtype(), device=x.get_device())

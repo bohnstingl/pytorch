@@ -1459,6 +1459,88 @@ def forward(self, pred_1, x_1):
         result_expected = _fake_associative_scan(non_pointwise, x, 0, reverse=reverse)
         self.assertEqual(result1, result_expected)
 
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("reverse", [False, True])
+    @parametrize("combine_mode", ["pointwise", "generic"])
+    @parametrize("device", [torch.device("cuda")])
+    def test_generic_associative_scan_freevars_CUDA(
+        self, reverse, combine_mode, device
+    ):
+        Hp = torch.ones(1, device=device) * 2
+
+        def fct_freevars_pointwise(x: torch.Tensor, y: torch.Tensor):
+            return x * Hp + y * Hp
+
+        Hnp = torch.diag(torch.ones(2, device=device))
+
+        def fct_freevars_nonpointwise(x: torch.Tensor, y: torch.Tensor):
+            return x @ Hnp + y @ Hnp
+
+        inp = torch.randn(3, 2, 2, device=device, requires_grad=True)
+
+        torch.compiler.reset()
+        associative_scan1 = torch.compile(associative_scan, fullgraph=True)
+        associative_scan2 = associative_scan
+
+        if combine_mode == "pointwise":
+            with self.assertRaisesRegex(Exception, r"."):
+                result1 = associative_scan1(
+                    fct_freevars_pointwise,
+                    inp,
+                    0,
+                    combine_mode=combine_mode,
+                    reverse=reverse,
+                )
+
+            with self.assertRaisesRegex(Exception, r"."):
+                result1 = associative_scan1(
+                    fct_freevars_nonpointwise,
+                    inp,
+                    0,
+                    combine_mode=combine_mode,
+                    reverse=reverse,
+                )
+        else:
+            result1 = associative_scan1(
+                fct_freevars_pointwise,
+                inp,
+                0,
+                combine_mode=combine_mode,
+                reverse=reverse,
+            )
+            result2 = associative_scan2(
+                fct_freevars_pointwise,
+                inp,
+                0,
+                combine_mode=combine_mode,
+                reverse=reverse,
+            )
+            expected_result = _fake_associative_scan(
+                fct_freevars_pointwise, inp, 0, reverse=reverse
+            )
+            self.assertEqual(result1, expected_result)
+            self.assertEqual(result2, expected_result)
+
+            result1 = associative_scan1(
+                fct_freevars_nonpointwise,
+                inp,
+                0,
+                combine_mode=combine_mode,
+                reverse=reverse,
+            )
+            result2 = associative_scan2(
+                fct_freevars_nonpointwise,
+                inp,
+                0,
+                combine_mode=combine_mode,
+                reverse=reverse,
+            )
+            expected_result = _fake_associative_scan(
+                fct_freevars_nonpointwise, inp, 0, reverse=reverse
+            )
+            self.assertEqual(result1, expected_result)
+            self.assertEqual(result2, expected_result)
+
 
 @unittest.skipIf(IS_WINDOWS, "Windows not supported for this test")
 @skipIfNoDynamoSupport

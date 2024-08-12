@@ -1011,10 +1011,10 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
 
         args, kwargs = LazyVariableTracker.realize_all((args, kwargs))
 
-        def arg_extractor(combine_fn, input, dim):
-            return combine_fn, input, dim
+        def arg_extractor(combine_fn, input, dim, lifted_args):
+            return combine_fn, input, dim, lifted_args
 
-        combine_fn, input, dim = arg_extractor(*args, **kwargs)
+        combine_fn, input, dim, lifted_args = arg_extractor(*args, **kwargs)
 
         if input.python_type() != list:
             unimplemented(
@@ -1059,10 +1059,7 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
             set_subgraph_inputs="flatten_manual",
         )
 
-        if combine_lifted_freevars:
-            unimplemented(
-                f"Combine fn had unexpected freevars: {combine_lifted_freevars}"
-            )
+        lifted_args = tuple(arg for arg in combine_lifted_freevars.keys())
 
         if combine_result.python_type() != list:
             unimplemented(
@@ -1092,6 +1089,7 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
             make_attr(tx, combine_fn_name),
             input_proxy,
             dim.as_proxy(),
+            lifted_args,
         )
 
         with tx.fake_mode:
