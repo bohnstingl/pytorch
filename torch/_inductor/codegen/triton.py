@@ -2239,8 +2239,10 @@ class TritonKernel(SIMDKernel):
             return tuple(result_vars)
 
         partial_scan_vars = cse_multiple(
-            # f"tl.associative_scan(({csv(broadcasted_values)}), {dim}, {combine_helper_fn}, {reverse})",
-            f"tl.associati_scan(({csv(broadcasted_values)}), {dim}, {combine_helper_fn}, '{reverse}')",
+            # f"tl.associative_scan(({csv(broadcasted_values)}), {dim}, {combine_helper_fn})",
+            # f"tl.associative_scan(({csv(broadcasted_values)}), {dim}, {combine_helper_fn}, True)",
+            f"tl.associative_scan(({csv(broadcasted_values)}), {dim}, {combine_helper_fn}, {reverse})",
+            # f"tl.associative_scan(({csv(broadcasted_values)}), {dim-1}, {combine_helper_fn}, '{reverse}')",
             len(values),
             masks,
         )

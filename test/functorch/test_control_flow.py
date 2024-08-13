@@ -1266,8 +1266,8 @@ def forward(self, pred_1, x_1):
 
     @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
     # @parametrize("reverse", [False, True])
-    # @parametrize("reverse", [True])
-    @parametrize("reverse", [False])
+    @parametrize("reverse", [True])
+    # @parametrize("reverse", [False])
     @parametrize("compile_mode", ["compile", "compile_dynamic_shape"])
     @parametrize("device", [torch.device("cuda")])
     def test_pointwise_associative_scan_reverse_compile(
@@ -1295,6 +1295,8 @@ def forward(self, pred_1, x_1):
         for op, op_pt in [(add, torch.cumsum), (mul, torch.cumprod)]:
             result = associative_scan_fct(op, x, 0, reverse=reverse)
             result_exp = _fake_associative_scan(op, x, 0, reverse=reverse)
+            print(result)
+            print(result_exp)
             self.assertEqual(result, result_exp)
             if not reverse:
                 result_exp_PT = op_pt(x, 0)
