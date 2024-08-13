@@ -798,9 +798,9 @@ class MockHandler:
         return (f"ops.frexp({x})[0]", f"ops.frexp({x})[1]")
 
     @staticmethod
-    def scan(dtypes, combine_fn, values):
+    def scan(dtypes, combine_fn, values, reverse):
         return tuple(
-            f"ops.scan({dtypes}, {combine_fn}, {values})[{i}]"
+            f"ops.scan({dtypes}, {combine_fn}, {values}, {reverse})[{i}]"
             for i in range(len(values))
         )
 

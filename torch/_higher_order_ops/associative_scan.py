@@ -84,8 +84,8 @@ def associative_scan(
 
     leaves, spec = pytree.tree_flatten(input)
 
-    if reverse:
-        leaves = [torch.flip(elem, [dim]) for elem in leaves]
+    # if reverse:
+    #     leaves = [torch.flip(elem, [dim]) for elem in leaves]
 
     assert len(leaves) >= 1, "expected at least 1 input leaf"
     assert all(
@@ -102,10 +102,10 @@ def associative_scan(
         wrap_combine_fn_flat, combine_fn=combine_fn, spec=spec, num_leaves=len(leaves)
     )
 
-    result_flat = associative_scan_op(combine_fn, leaves, dim)
+    result_flat = associative_scan_op(combine_fn, leaves, dim, reverse)
 
-    if reverse:
-        result_flat = [torch.flip(elem, [dim]) for elem in result_flat]
+    # if reverse:
+    #     result_flat = [torch.flip(elem, [dim]) for elem in result_flat]
 
     return pytree.tree_unflatten(result_flat, spec)
 
@@ -114,7 +114,7 @@ associative_scan_op = HigherOrderOperator("associative_scan")
 
 
 def trace_associative_scan(
-    proxy_mode, func_overload, combine_fn: Callable, input: List[torch.Tensor], dim: int
+    proxy_mode, func_overload, combine_fn: Callable, input: List[torch.Tensor], dim: int, reverse: bool
 ):
     with disable_proxy_modes_tracing():
         sample_inputs = [
@@ -152,7 +152,7 @@ def trace_associative_scan(
 
     proxy_mode.tracer.root.register_module(combine_graph_name, combine_graph)
 
-    args = (combine_graph, input, dim)
+    args = (combine_graph, input, dim, reverse)
     proxy_args = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, args)
     out_proxy = proxy_mode.tracer.create_proxy(
         "call_function", func_overload, proxy_args, {}, name="associative_scan"
@@ -165,7 +165,7 @@ def trace_associative_scan(
 
 
 @associative_scan_op.py_impl(DispatchKey.CompositeExplicitAutograd)
-def associative_scan_op_dense(combine_fn, input, dim):
+def associative_scan_op_dense(combine_fn, input, dim, reverse):
     raise NotImplementedError("associative_scan is not implemented for eager")
 
 
@@ -175,25 +175,25 @@ associative_scan_op.py_impl(DispatchKey.Autograd)(
 
 
 @associative_scan_op.py_impl(ProxyTorchDispatchMode)
-def associative_scan_proxy_mode(mode, combine_fn, input, dim):
+def associative_scan_proxy_mode(mode, combine_fn, input, dim, reverse):
     if mode.enable_tracing:
-        return trace_associative_scan(mode, associative_scan_op, combine_fn, input, dim)
+        return trace_associative_scan(mode, associative_scan_op, combine_fn, input, dim, reverse)
     else:
-        return associative_scan_op(mode, associative_scan_op, combine_fn, input, dim)
+        return associative_scan_op(mode, associative_scan_op, combine_fn, input, dim, reverse)
 
 
 @associative_scan_op.py_impl(FakeTensorMode)
-def assoiciative_scan_fake_tensor_mode(mode, combine_fn, input, dim):
+def assoiciative_scan_fake_tensor_mode(mode, combine_fn, input, dim, reverse):
     with mode:
         return [x.clone() for x in input]
 
 
 @associative_scan_op.py_functionalize_impl
-def associative_scan_functionalize(ctx, combine_fn, input, dim):
+def associative_scan_functionalize(ctx, combine_fn, input, dim, reverse):
     unwrapped_input = ctx.unwrap_tensors(input)
     with ctx.redispatch_to_next() as m:
         functional_combine_fn = ctx.functionalize(combine_fn)
-        ret = associative_scan_op(functional_combine_fn, unwrapped_input, dim)
+        ret = associative_scan_op(functional_combine_fn, unwrapped_input, dim, reverse)
     return ctx.wrap_tensors(ret)
 
 

@@ -6206,7 +6206,7 @@ def while_loop(cond_fn, body_fn, carried_inputs, additional_inputs):
 
 
 @register_lowering(associative_scan_op, type_promotion_kind=None)
-def associative_scan(combine_fn: ir.Subgraph, input, dim: int):
+def associative_scan(combine_fn: ir.Subgraph, input, dim: int, reverse: bool):
     from .subgraph_lowering import InputDescriptor, lower_pointwise_subgraph
 
     subgraph_inputs = [
@@ -6218,12 +6218,13 @@ def associative_scan(combine_fn: ir.Subgraph, input, dim: int):
     def wrapped_combine_fn(lhs, rhs):
         return lowered_combine_fn(
             *pytree.tree_leaves(lhs),
-            *pytree.tree_leaves(rhs),
+            *pytree.tree_leaves(rhs)
         )
 
     kwargs = _make_scan_inner(input[0], axis=dim, dtype=None)
     kwargs["dtypes"] = tuple(x.get_dtype() for x in input)
     kwargs["inner_fns"] = tuple(x.make_loader() for x in input)
+    kwargs["reverse"] = reverse
     result = ir.Scan.create(
         combine_fn=wrapped_combine_fn,
         can_fallback_to_aten=False,

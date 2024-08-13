@@ -2175,6 +2175,7 @@ class TritonKernel(SIMDKernel):
             [Tuple[CSEVariable, ...], Tuple[CSEVariable, ...]], Tuple[CSEVariable, ...]
         ],
         values: Tuple[CSEVariable, ...],
+        reverse: bool = False
     ) -> Tuple[CSEVariable, ...]:
         assert self.inside_reduction
         masks = OrderedSet(f"{tree.prefix}mask" for tree in self.range_trees)
@@ -2238,10 +2239,13 @@ class TritonKernel(SIMDKernel):
             return tuple(result_vars)
 
         partial_scan_vars = cse_multiple(
-            f"tl.associative_scan(({csv(broadcasted_values)}), {dim}, {combine_helper_fn})",
+            # f"tl.associative_scan(({csv(broadcasted_values)}), {dim}, {combine_helper_fn}, {reverse})",
+            f"tl.associati_scan(({csv(broadcasted_values)}), {dim}, {combine_helper_fn}, '{reverse}')",
             len(values),
             masks,
         )
+        
+        print(f"tl.associative_scan(({csv(broadcasted_values)}), {dim}, {combine_helper_fn}, {reverse})")
 
         if not self.persistent_reduction:
 

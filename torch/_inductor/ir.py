@@ -1737,6 +1737,7 @@ class Scan(Loops):
     # output_index indexes the following tuples
     dtypes: Tuple[torch.dtype, ...]
     inner_fns: Tuple[Callable[..., Any], ...]
+    reverse: bool = False
 
     # HACK we mimick reduction
 
@@ -1757,7 +1758,7 @@ class Scan(Loops):
     def store_reduction(self, output_name, indexer, vars, scan_vars):
         idx = self.reindex(vars, scan_vars)
         values = [inner_fn(idx) for inner_fn in self.inner_fns]
-        result = ops.scan(self.dtypes, self.combine_fn, values)
+        result = ops.scan(self.dtypes, self.combine_fn, values, self.reverse)
         return ops.store(output_name, indexer(idx), result[self.output_index])
 
     def get_reduction_type(self):
@@ -6874,9 +6875,10 @@ class LoopBodyBlock:
                     [Tuple[Any, ...], Tuple[Any, ...]], Tuple[Any, ...]
                 ],
                 value_proxy,
+                reverse,
             ):
                 def shim(dtypes, values):
-                    return V.ops.scan(dtypes, combine_fn, values)
+                    return V.ops.scan(dtypes, combine_fn, values, reverse)
 
                 name = self.body.add_submodule(shim, "scan")
                 result = tracer.create_proxy(

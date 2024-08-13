@@ -1966,8 +1966,9 @@ class Kernel(CodeGen):
                     Tuple[CSEVariable, ...],
                 ],
                 values: Tuple[CSEVariable, ...],
+                reverse: bool = False
             ) -> Tuple[CSEVariable, ...]:
-                return self.scan(dtypes, combine_fn, values)
+                return self.scan(dtypes, combine_fn, values, reverse)
 
             @staticmethod
             def sort(
