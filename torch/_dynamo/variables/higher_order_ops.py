@@ -866,9 +866,9 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
                 f"torch.while_loop: Got unexpected kwargs: {list(kwargs.keys())}"
             )
 
-        if len(args) != 4:
+        if len(args) != 5:
             unimplemented(
-                f"Expected 4 arguments but got {len(args)}.\n"
+                f"Expected 5 arguments but got {len(args)}.\n"
                 f"Usage: while_loop(cond_fn, body_fn, operands)",
             )
 
@@ -892,6 +892,13 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
                 f"Expected a tuple but got {args[3].python_type()}",
             )
         additional_inputs = args[3].unpack_var_sequence(tx)
+        
+        # return_sequence check
+        if not isinstance(args[4], ConstantVariable):
+            unimplemented(
+                f"Expected return_sequence to be a tuple but got {args[4].python_type()}",
+            )
+        return_sequence = args[4]
 
         (
             (cond_r, cond_treespec),
@@ -979,13 +986,22 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
             tuple(
                 [inp.as_proxy() for inp in additional_inputs] + additional_lifted_inputs
             ),
+            return_sequence.as_proxy(),
         )
 
-        flat_example_value = pytree.tree_map_only(
-            torch.fx.Proxy,
-            lambda a: a.node.meta["example_value"],
-            body_r.as_proxy(),
-        )
+        if return_sequence.as_proxy():
+            flat_example_value = pytree.tree_map_only(
+                torch.fx.Proxy,
+                lambda a: a.node.meta["example_value"],
+                body_r.as_proxy(),
+            )
+            flat_example_value = tuple([flat_example_value])
+        else:
+            flat_example_value = pytree.tree_map_only(
+                torch.fx.Proxy,
+                lambda a: a.node.meta["example_value"],
+                body_r.as_proxy(),
+            )
 
         return _call_function_and_unflatten_output(
             tx,

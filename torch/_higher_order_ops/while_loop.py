@@ -27,6 +27,7 @@ class WhileLoopOp(HigherOrderOperator):
         body_fn: Callable,
         carried_inputs: Tuple[Union[torch.Tensor, int, float, bool]],
         additional_inputs: Tuple[Union[torch.Tensor, int, float, bool]],
+        return_sequence: bool = False,
         /,
     ):
         if not isinstance(carried_inputs, tuple):
@@ -36,6 +37,10 @@ class WhileLoopOp(HigherOrderOperator):
         if not isinstance(additional_inputs, tuple):
             raise RuntimeError(
                 f"additional_inputs must be a tuple, got {type(additional_inputs)}"
+            )
+        if not isinstance(return_sequence, bool):
+            raise RuntimeError(
+                f"return_sequence must be a bool, got {type(return_sequence)}"
             )
         if not all(
             isinstance(t, (torch.Tensor, int, float, bool)) for t in carried_inputs
@@ -52,13 +57,13 @@ class WhileLoopOp(HigherOrderOperator):
                 "additional_inputs must be a tuple of tensors, ints, floats, or bools, got "
                 f"{additional_inputs}"
             )
-        return super().__call__(cond_fn, body_fn, carried_inputs, additional_inputs)
+        return super().__call__(cond_fn, body_fn, carried_inputs, additional_inputs, return_sequence)
 
 
 while_loop_op = WhileLoopOp()
 
 
-def while_loop(cond_fn, body_fn, carried_inputs):
+def while_loop(cond_fn, body_fn, carried_inputs, return_sequence):
     r"""
     Run body_fn(*carried_inputs) while cond_fn(*carried_inputs) returns a True scalar tensor. Returns the output of body_fn or
     initial carried_inputs.
@@ -117,12 +122,16 @@ def while_loop(cond_fn, body_fn, carried_inputs):
     # parameters and buffers accessed in cond_fn or body_fn or tensor closures will become additional_inputs.
     additional_inputs: Tuple = ()
     if torch.compiler.is_dynamo_compiling():
-        return while_loop_op(cond_fn, body_fn, carried_inputs, additional_inputs)
+        return while_loop_op(cond_fn, body_fn, carried_inputs, additional_inputs, return_sequence)
 
-    def _validate_input(cond_fn, body_fn, carried_inputs):
+    def _validate_input(cond_fn, body_fn, carried_inputs, return_sequence):
         if not callable(cond_fn) or not callable(body_fn):
             raise RuntimeError("Expect cond_fn and body_fn to be callbale.")
 
+        if not isinstance(return_sequence, bool):
+            raise RuntimeError(
+                "Expect return_sequence to be a bool, but got {return_sequence}."
+            )
         if not isinstance(carried_inputs, (tuple, list)) or pytree.tree_any(
             lambda t: not isinstance(t, torch.Tensor), carried_inputs
         ):
@@ -131,7 +140,7 @@ def while_loop(cond_fn, body_fn, carried_inputs):
                 f"consists of tensor leaves, but got {carried_inputs}."
             )
 
-    _validate_input(cond_fn, body_fn, carried_inputs)
+    _validate_input(cond_fn, body_fn, carried_inputs, return_sequence)
 
     # Dynamo is expecting a callable with "__code__" attribute.
     # We cannot directly pass cond_op to it. So we wrap it in a dummy function.
@@ -140,12 +149,12 @@ def while_loop(cond_fn, body_fn, carried_inputs):
 
     with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
         return torch.compile(_while_loop_op_wrapper, backend="eager", fullgraph=True)(
-            cond_fn, body_fn, carried_inputs, additional_inputs
+            cond_fn, body_fn, carried_inputs, additional_inputs, return_sequence
         )
 
 
 @while_loop_op.py_impl(DispatchKey.CompositeExplicitAutograd)
-def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
+def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs, return_sequence):
     carried_vals = carried_inputs
 
     def _is_boolean_scalar_tensor(pred):
@@ -159,6 +168,8 @@ def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
         raise RuntimeError(
             f"carried_inputs must be a tuple but got {type(carried_inputs)}"
         )
+        
+    sequence = []
 
     while pred := cond_fn(*carried_vals, *additional_inputs):
         if not _is_boolean_scalar_tensor(pred):
@@ -173,7 +184,13 @@ def while_loop_dense(cond_fn, body_fn, carried_inputs, additional_inputs):
             carried_inputs
         ), "body_fn should return the same number of elements as carried_inputs"
         carried_vals = out
-    return carried_vals
+        sequence.append(out)
+        
+    if not return_sequence:
+        return carried_vals
+    else:
+        # return (carried_vals, sequence)
+        return sequence
 
 
 while_loop_op.py_impl(DispatchKey.Autograd)(
@@ -182,9 +199,9 @@ while_loop_op.py_impl(DispatchKey.Autograd)(
 
 
 @while_loop_op.py_impl(ProxyTorchDispatchMode)
-def while_loop_tracing(mode, cond_fn, body_fn, carried_inputs, additional_inputs):
+def while_loop_tracing(mode, cond_fn, body_fn, carried_inputs, additional_inputs, return_sequence):
     def _trace_while_loop(
-        proxy_mode, while_loop_op, cond_fn, body_fn, carried_inputs, additional_inputs
+        proxy_mode, while_loop_op, cond_fn, body_fn, carried_inputs, additional_inputs, return_sequence
     ):
         cond_graph = reenter_make_fx(cond_fn)(*carried_inputs, *additional_inputs)
         body_graph = reenter_make_fx(body_fn)(*carried_inputs, *additional_inputs)
@@ -220,22 +237,23 @@ def while_loop_tracing(mode, cond_fn, body_fn, carried_inputs, additional_inputs
         )
 
     return _trace_while_loop(
-        mode, while_loop_op, cond_fn, body_fn, carried_inputs, additional_inputs
+        mode, while_loop_op, cond_fn, body_fn, carried_inputs, additional_inputs, return_sequence
     )
 
 
 @while_loop_op.py_impl(FakeTensorMode)
 def while_loop_fake_tensor_mode(
-    mode, cond_fn, body_fn, carried_inputs, additional_inputs
+    mode, cond_fn, body_fn, carried_inputs, additional_inputs, return_sequence
 ):
     with mode:
         return body_fn(*carried_inputs, *additional_inputs)
 
 
 @while_loop_op.py_functionalize_impl
-def while_loop_func(ctx, cond_fn, body_fn, carried_inputs, additional_inputs):
+def while_loop_func(ctx, cond_fn, body_fn, carried_inputs, additional_inputs, return_sequence):
     unwrapped_carried_inputs = ctx.unwrap_tensors(carried_inputs)
     unwrapped_additional_inputs = ctx.unwrap_tensors(additional_inputs)
+    unwrapped_return_sequence = ctx.unwrap_tensors(return_sequence)
     unwrapped_inputs = unwrapped_carried_inputs + unwrapped_additional_inputs
     with ctx.redispatch_to_next() as m:
         functional_cond_fn = ctx.functionalize(cond_fn)
@@ -263,5 +281,6 @@ def while_loop_func(ctx, cond_fn, body_fn, carried_inputs, additional_inputs):
             functional_body_fn,
             unwrapped_carried_inputs,
             unwrapped_additional_inputs,
+            unwrapped_return_sequence
         )
         return ctx.wrap_tensors(ret)

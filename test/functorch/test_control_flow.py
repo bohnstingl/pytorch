@@ -72,10 +72,15 @@ def _fake_map(f, x, *args):
     return _stack_pytree(zs)
 
 
-def _fake_while_loop(cond_fn, body_fn, operands):
+def _fake_while_loop(cond_fn, body_fn, operands, return_sequence=False):
+    sequence = []
     while cond_fn(*operands):
         operands = body_fn(*operands)
-    return operands
+        sequence.apend(operands)
+    if not return_sequence:
+        return operands
+    else:
+        return operands, sequence
 
 
 def _while_loop_tests():
@@ -1014,7 +1019,24 @@ def forward(self, pred_1, x_1):
         self.assertEqual(expected, res)
 
     @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
-    def test_while_loop_gpu(self):
+    @parametrize("device", [torch.device("cuda")])
+    def test_while_loop_gpu(self, device):
+        def cond_fn(x):
+            return x.sum() < 10
+
+        def body_fn(x):
+            return (x + 1,)
+
+        x = torch.zeros(1, device=device)
+        res = while_loop(cond_fn, body_fn, (x,))
+        expected = _fake_while_loop(cond_fn, body_fn, (x,))
+        self.assertEqual(expected, res)
+        
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("device", [torch.device("cuda")])
+    # @parametrize("return_sequence", [False, True])
+    @parametrize("return_sequence", [True])
+    def test_while_loop_return_sequence(self, device, return_sequence):
         def cond_fn(x):
             return x.sum() < 10
 
@@ -1022,8 +1044,16 @@ def forward(self, pred_1, x_1):
             return (x + 1,)
 
         x = torch.zeros(1, device="cuda")
-        res = while_loop(cond_fn, body_fn, (x,))
-        expected = _fake_while_loop(cond_fn, body_fn, (x,))
+        if not return_sequence:
+            with self.assertRaisesRegex(ValueError, "not enough values to unpack.*"):
+                res, sequence = while_loop(cond_fn, body_fn, (x,), return_sequence=return_sequence)
+                
+            res = while_loop(cond_fn, body_fn, (x,), return_sequence=return_sequence)
+        else:
+            sequence = while_loop(cond_fn, body_fn, (x,), return_sequence=return_sequence)
+            self.assertEqual(sequence, None)
+        
+        expected, sequence = _fake_while_loop(cond_fn, body_fn, (x,))
         self.assertEqual(expected, res)
 
     def test_map_illegal_inputs(self):
@@ -3546,6 +3576,7 @@ def forward(self, l_inp_, l_tmp_):
 
 
 instantiate_parametrized_tests(TestControlFlowTraced)
+instantiate_parametrized_tests(TestControlFlow)
 
 if __name__ == "__main__":
     run_tests()
