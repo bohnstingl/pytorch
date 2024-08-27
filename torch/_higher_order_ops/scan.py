@@ -8,23 +8,26 @@ import torch._prims_common as utils
 import torch._subclasses.functional_tensor
 import torch.utils._pytree as pytree
 from torch._C import DispatchKey
+from torch._dispatch.python import suspend_functionalization
 from torch._higher_order_ops.utils import (
     _has_potential_branch_input_alias,
     _has_potential_branch_input_mutation,
     _set_compilation_env,
-    autograd_not_implemented,
     reenter_make_fx,
     unique_graph_id,
     UnsupportedAliasMutationException,
 )
 from torch._ops import HigherOrderOperator
 from torch._subclasses.fake_tensor import FakeTensorMode
+from torch._subclasses.functional_tensor import disable_functional_mode
 from torch.fx.experimental.proxy_tensor import (
     disable_proxy_modes_tracing,
     ProxyTorchDispatchMode,
     track_tensor_tree,
 )
 from torch.utils._python_dispatch import _get_current_dispatch_mode
+
+from .utils import _from_fun, create_fw_bw_graph
 
 
 aten = torch._ops.ops.aten
@@ -41,6 +44,37 @@ def wrap_combine_fn_flat(
     combined_flat = pytree.tree_leaves(combined)
     assert num_init_leaves == len(carry_flat)
     return (carry_flat, combined_flat)
+
+
+def create_fw_bw_graph_combinefn(combine_fn, input, dim):
+    # See Note [HOP create fw_bw graph] in create_fw_bw_graph in utils.py
+
+    with suspend_functionalization(), disable_functional_mode():
+        with disable_proxy_modes_tracing():
+            fw_inputs = [
+                # pytree.tree_map(_from_fun, x)
+                pytree.tree_map(
+                    _from_fun,
+                    aten.slice(x, dim, 0, 1, 1),
+                )
+                for x in itertools.chain(input, input)
+            ]
+
+            fw_outputs_true = pytree.tree_map(_from_fun, combine_fn(*fw_inputs))
+            if any(not isinstance(out, torch.Tensor) for out in fw_outputs_true):
+                raise RuntimeError(
+                    "Expect outputs of combine_fn to only contains tensors. "
+                    f"Got types {[type(out) for out in fw_outputs_true]}."
+                )
+
+            # TODO: There is a major issue that the create_fw_bw in the higher_order_op is invoked twice:
+            # Once in the forward path (as it should) and once in the backward path, where it shouldn't be called
+            # If we can get rid of the second invokation, it would simplify this function
+            fw_graph, joint_graph = create_fw_bw_graph(
+                combine_fn, False, fw_inputs, fw_outputs_true
+            )
+
+        return fw_graph, joint_graph
 
 
 def scan(
@@ -109,7 +143,6 @@ def scan(
 
     # TODO: Support closures/nn_modules in order to be able represent RNNs with scan
     # TODO: Support _inductor lowering
-    # TODO: Support Autograd
     # TODO: Unify handling of pytrees for control flow ops, such as cond, while_loop, etc.
 
     # Dynamo is expecting a callable with "__code__" attribute.
@@ -386,9 +419,219 @@ def scan_op_dense(combine_fn, init, xs, dim, reverse):
     return generic_scan(combine_fn, init, xs, dim, reverse)
 
 
-scan_op.py_impl(DispatchKey.Autograd)(
-    autograd_not_implemented(scan_op, deferred_error=True)
-)
+class ScanAutogradOp(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        fw_graph,
+        joint_graph,
+        dim,
+        *input,
+    ):
+        ctx._joint_graph = joint_graph
+        ctx._dim = dim
+        ctx._num_leaves = len(input)
+        ctx._num_elems = input[0].size()[dim]
+
+        outs = generic_scan(fw_graph, input, dim)
+        ctx.save_for_backward(*(list(input) + outs))
+
+        return tuple(outs)
+
+    @staticmethod
+    def backward(ctx, *flat_grads):
+        r"""
+        This function computes the gradients of the scan operation.
+        It does so by factorizing the components of the chainrule into
+        a elementwise multiplcation of a matrix and a vector.
+        The rows of the matrix can be efficiently computed using ``cumprod``.
+
+        Args:
+            flat_grads (torch.Tensor): The tensor of upstream gradients, or anested pytree of tensors.
+
+        Example::
+
+            The ``fw_graph`` f(.,.), used in the forward function, is the operator used during the scan. For example
+            def f(x: torch.Tensor, y: torch.Tensor):
+                return x + y
+
+            The ``joint_graph`` g(.,.), used in the backward function, is the gradient of the function f(.,.).
+            It computes the gradients for x and y of f. For example for the function f above
+            def g(x: torch.Tensor, y: torch.Tensor):
+                return 1., 1.
+            In other words, the first output of g represents df(x,y)/dx, while the second one represents df(x,y)/dy.
+            This will be exploited in the algorithm below.
+
+            The inputs to ``scan`` in the forward path are x_1, x_2, ..., x_T
+            The outputs of ``scan`` in the forward path are y_1, y_2, ..., y_T, where
+            y_1 = x_1
+            y_2 = f(y_1, x_2)
+            ...
+            y_T = f(y_{T-1}, x_T)
+
+            The gradients of y_T with respect to the vector x are computed as:
+            dy_T / dx = dy_T/dx_1 + dy_T/dx_2 + ... + dy_T/dx_T
+
+            A few examples:
+            dy_T/dx_T = df(y_{T-1}, x_T)/dx_T -> second output of g(y_{T-1}, x_T)
+
+            dy_T/dx_{T-1} = df(y_{T-1}, x_T)/dy_{T-1} . df(y_{T-2}, x_{T-1})/dx_{T-1}
+                          -> first output of g(y_{T-1}, x_T) . second output of g(y_{T-2}, x_{T-1})
+
+            dy_T/dx_{T-2} = df(y_{T-1}, x_T)/dy_{T-1}
+                            . df(y_{T-2}, x_{T-1})/dy_{T-2}
+                            . df(y_{T-3}, x_{T-2})/dx_{T-2}
+                          ->  first output of g(y_{T-1}, x_T)
+                            . first output of g(y_{T-2}, x_{T-1})
+                            . second output of g(y_{T-3}, x_{T-2})
+
+            A conceptually similar pattern can be observerd for dy_{T-1} / dx
+            dy_{T-1}/dx_T = 0
+
+            dy_{T-1}/dx_{T-1} = df(y_{T-2}, x_{T-1})/dx_{T-1} -> second output of g(y_{T-2}, x_{T-1})
+
+            dy_{T-1}/dx_{T-2} = df(y_{T-2}, x_{T-1})/dy_{T-2} . df(y_{T-3}, x_{T-2})/dx_{T-2}
+                              -> first output of g(y_{T-2}, x_{T-1})
+                              . second output of g(y_{T-3}, x_{T-2})
+
+            If one inspects the pattern carefully, it becomes aparant that there is a product of
+            'first outputs', followed by the last term which is a 'second output'.
+            This can be represented with a matrix-vector multiplication, where the rows of the matrix contain
+            the products of the 'first ouputs' and the vector contains the 'second outputs'.
+            Furthermore, the product of 'first outputs' is continuously expanded leftwards with
+            additional time steps. Therefore, the products can also be computed utilizing cumprod.
+            The final gradients can be computed using an elementwise matrix-vector multiplication.
+        """
+
+        num_elems = ctx._num_elems
+        num_leaves = ctx._num_leaves
+        joint_graph = ctx._joint_graph
+        dim = ctx._dim
+
+        # Retrieve the forward inputs and the forward outputs
+        operands_outs = ctx.saved_tensors
+        input, outs = operands_outs[:num_leaves], operands_outs[num_leaves:]
+
+        inp_flipped = [
+            aten.slice(torch.flip(inp, [dim]), dim, 0, -1, 1) for inp in input
+        ]
+        ones_inp = [torch.ones_like(aten.slice(inp, dim, 0, 1, 1)) for inp in input]
+        zeros_inp = [torch.zeros_like(aten.slice(inp, dim, 0, 1, 1)) for inp in input]
+        out_flipped = [
+            aten.slice(torch.flip(out, [dim]), dim, 1, None, 1) for out in outs
+        ]
+
+        helpers = joint_graph(
+            *[aten.slice(fl, dim, 0, -1, 1) for fl in flat_grads],
+            *out_flipped,
+            *inp_flipped,
+        )
+
+        # This is the vector of 'first outputs'
+        helper1 = torch.stack(
+            [torch.concat([h, o], dim) for h, o in zip(helpers[num_leaves:], ones_inp)],
+            0,
+        )
+
+        # First sub-diagonal containing the 'second outputs'
+        helper2 = [
+            torch.concat([o, h], dim) for h, o in zip(helpers[0:num_leaves], ones_inp)
+        ]
+
+        # More efficient version to compute the gradient matrix
+        helper_mats = [
+            torch.unsqueeze(
+                torch.stack(
+                    [
+                        torch.concat(
+                            [z] * (num_elems - n)
+                            + [o]
+                            + [aten.slice(h, dim, 1, n, 1) for h in helper2],
+                            dim,
+                        )
+                        for o, z in zip(ones_inp, ones_inp)
+                    ],
+                    0,
+                ),
+                0,
+            )
+            for n in range(num_elems, 0, -1)
+        ]
+        helper_mats = torch.concat(helper_mats, 0)
+        helper_mats = torch.cumprod(helper_mats, dim + 2)
+
+        tril = torch.tril(
+            torch.ones((num_elems, num_elems), device=helper_mats.device), diagonal=-1
+        )
+        helper_mats = helper_mats - torch.unsqueeze(
+            torch.unsqueeze(torch.unsqueeze(tril, 1), 1), -1
+        )
+
+        # # Slow computation of matrix
+        # # This is the matrix of 'second outputs'
+        # helper_mats = torch.unsqueeze(
+        #     torch.stack(
+        #         [
+        #             torch.concat([z] * (num_elems - 1) + [o], dim)
+        #             for o, z in zip(ones_inp, zeros_inp)
+        #         ],
+        #         0,
+        #     ),
+        #     0,
+        # )
+        # for n in range(num_elems - 1, 0, -1):
+        #     row = torch.stack(
+        #         [
+        #             hm * h2
+        #             for hm, h2 in zip(
+        #                 helper_mats[0],
+        #                 [aten.slice(h, dim, n, n+1, 1) for h in helper2],
+        #             )
+        #         ],
+        #         0,
+        #     )
+        #     row += torch.stack(
+        #         [
+        #             torch.concat([z] * (n - 1) + [o] + [z] * (num_elems - n), dim)
+        #             for o, z in zip(ones_inp, zeros_inp)
+        #         ],
+        #         0,
+        #     )
+        #     helper_mats = torch.concat((torch.unsqueeze(row, 0), helper_mats), 0)
+
+        # Elementwise matrix-vector multiplication to retrieve the final gradients
+        grads = torch.split(
+            torch.flip(torch.sum(helper1 * helper_mats, 0), [dim + 1]), 1, 0
+        )
+        grads = tuple([torch.squeeze(g, 0) for g in grads])
+
+        return None, None, None, *grads
+
+
+@scan_op.py_impl(DispatchKey.Autograd)
+def scan_autograd(combine_fn, input, dim, reverse):
+    # A shortcut for the case where all inputs don't require gradient,
+    # we skip tracing the forward and backward graph.
+    if pytree.tree_all_only(
+        torch.Tensor,
+        lambda t: not t.requires_grad,  # type: ignore[union-attr]
+        (input,),
+    ):
+        with torch._C._AutoDispatchBelowAutograd():
+            return scan_op(combine_fn, input, dim)
+
+    (
+        fw_graph,
+        joint_graph,
+    ) = create_fw_bw_graph_combinefn(combine_fn, input, dim)
+
+    flat_out = ScanAutogradOp.apply(
+        fw_graph,
+        joint_graph,
+        dim,
+        *input,
+    )
+    return flat_out
 
 
 @scan_op.py_impl(ProxyTorchDispatchMode)

@@ -2936,6 +2936,31 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
     return (getitem_1, getitem_3)""",
         )
 
+    @unittest.skipIf(not SM70OrLater, "triton")
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("reverse", [False, True])
+    @parametrize("device", [torch.device("cuda")])
+    def test_pointwise_scan_simple_autograd(self, reverse, device):
+        def add(x: torch.Tensor, y: torch.Tensor):
+            return x + y
+
+        def mul(x: torch.Tensor, y: torch.Tensor):
+            return x * y
+
+        x = torch.randn(1, 2, 1, device=device, requires_grad=True)
+        for op, op_pt in [(add, torch.cumsum), (mul, torch.cumprod)]:
+            result = scan(op, x, 1, reverse=reverse)
+            result_exp = _fake_scan(op, x, 1, reverse=reverse)
+            self.assertEqual(result, result_exp)
+            if not reverse:
+                result_exp_PT = op_pt(x, 1)
+                self.assertEqual(result, result_exp_PT)
+
+            grad_out = torch.ones_like(result_exp)
+            expected_grads = torch.autograd.grad(result_exp, (x,), grad_out)
+            grads = torch.autograd.grad(result, (x,), grad_out)
+            self.assertEqual(grads, expected_grads)
+
 
 @unittest.skipIf(IS_WINDOWS, "Windows not supported for this test")
 @skipIfNoDynamoSupport
