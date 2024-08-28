@@ -37,9 +37,16 @@ def create_fw_bw_graph_combinefn(combine_fn, input, dim):
         with disable_proxy_modes_tracing():
             fw_inputs = [
                 # pytree.tree_map(_from_fun, x)
-                pytree.tree_map(
-                    _from_fun,
-                    aten.slice(x, dim, 0, 1, 1),
+                aten.slice(
+                    pytree.tree_map(
+                        _from_fun,
+                        # aten.slice(x, dim, 0, 1, 1),
+                        x,
+                    ),
+                    dim,
+                    0,
+                    1,
+                    1,
                 )
                 for x in itertools.chain(input, input)
             ]
@@ -457,7 +464,6 @@ class ScanAutogradOp(torch.autograd.Function):
             aten.slice(torch.flip(inp, [dim]), dim, 0, -1, 1) for inp in input
         ]
         ones_inp = [torch.ones_like(aten.slice(inp, dim, 0, 1, 1)) for inp in input]
-        zeros_inp = [torch.zeros_like(aten.slice(inp, dim, 0, 1, 1)) for inp in input]
         out_flipped = [
             aten.slice(torch.flip(out, [dim]), dim, 1, None, 1) for out in outs
         ]
@@ -504,8 +510,15 @@ class ScanAutogradOp(torch.autograd.Function):
         tril = torch.tril(
             torch.ones((num_elems, num_elems), device=helper_mats.device), diagonal=-1
         )
-        helper_mats = helper_mats - torch.unsqueeze(
-            torch.unsqueeze(torch.unsqueeze(tril, 1), 1), -1
+        # helper_mats is of shape num_elems x shape_of_input
+        # shape_of_input contains num_elems at dim
+        helper_mats = helper_mats - torch.reshape(
+            tril,
+            [num_elems]
+            + [1]
+            + [1] * (dim)
+            + [num_elems]
+            + [1] * (len(helper_mats[0].shape) - dim - 2),
         )
 
         # # Slow computation of matrix

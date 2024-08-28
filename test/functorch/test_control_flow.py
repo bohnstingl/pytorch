@@ -1953,19 +1953,22 @@ def forward(self, L_x_ : torch.Tensor):
     @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
     @parametrize("reverse", [False, True])
     @parametrize("device", [torch.device("cuda")])
-    def test_pointwise_scan_simple_autograd(self, reverse, device):
+    def test_pointwise_scan_autograd_simple(self, reverse, device):
         def add(x: torch.Tensor, y: torch.Tensor):
             return x + y
 
         def mul(x: torch.Tensor, y: torch.Tensor):
             return x * y
 
+        def div(x: torch.Tensor, y: torch.Tensor):
+            return x / y
+
         x = torch.randn(1, 2, 1, device=device, requires_grad=True)
-        for op, op_pt in [(add, torch.cumsum), (mul, torch.cumprod)]:
+        for op, op_pt in [(add, torch.cumsum), (mul, torch.cumprod), (div, None)]:
             result = scan(op, x, 1, reverse=reverse)
             result_exp = _fake_scan(op, x, 1, reverse=reverse)
             self.assertEqual(result, result_exp)
-            if not reverse:
+            if not reverse and op_pt is not None:
                 result_exp_PT = op_pt(x, 1)
                 self.assertEqual(result, result_exp_PT)
 
@@ -1973,6 +1976,47 @@ def forward(self, L_x_ : torch.Tensor):
             expected_grads = torch.autograd.grad(result_exp, (x,), grad_out)
             grads = torch.autograd.grad(result, (x,), grad_out)
             self.assertEqual(grads, expected_grads)
+
+    @unittest.skipIf(not SM70OrLater, "triton")
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("scan_op", [associative_scan, scan])
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
+    @parametrize("reverse", [False, True])
+    @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
+    # associative_scan currently does not support AutoGrad
+    @decorateIf(unittest.skip, lambda params: params["scan_op"] == associative_scan)
+    # Skipping the scan tests, as scan currently does not support inductor
+    @decorateIf(
+        unittest.skip,
+        lambda params: (
+            params["scan_op"] == scan and params["compile_mode"] != "eager"
+        ),
+    )
+    def test_pointwise_scan_autograd(self, scan_op, compile_mode, reverse, device):
+        def fct_nonpointwise(x: torch.Tensor, y: torch.Tensor):
+            W = torch.ones(2, device=x.device)
+            return x * W + y * W
+
+        x = torch.randn(3, 2, 2, requires_grad=True, device=device)
+
+        torch.compiler.reset()
+        if compile_mode == "compile":
+            scan_fct = torch.compile(scan_op, fullgraph=True, dynamic=False)
+        elif compile_mode == "compile_dynamic_shape":
+            scan_fct = torch.compile(scan_op, fullgraph=True, dynamic=True)
+        elif compile_mode == "eager":
+            scan_fct = torch.compile(scan_op, fullgraph=True, backend="eager")
+        else:
+            scan_fct = scan_op
+
+        result = scan_fct(fct_nonpointwise, x, 0, reverse=reverse)
+        expected_result = _fake_scan(fct_nonpointwise, x, 0, reverse=reverse)
+        self.assertEqual(result, expected_result)
+
+        grad_out = torch.ones_like(result)
+        grads = torch.autograd.grad(result, (x,), grad_out)
+        expected_grads = torch.autograd.grad(expected_result, (x,), grad_out)
+        self.assertEqual(expected_grads, grads)
 
 
 @unittest.skipIf(IS_WINDOWS, "Windows not supported for this test")
