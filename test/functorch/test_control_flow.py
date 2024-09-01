@@ -2018,6 +2018,100 @@ def forward(self, L_x_ : torch.Tensor):
         expected_grads = torch.autograd.grad(expected_result, (x,), grad_out)
         self.assertEqual(expected_grads, grads)
 
+    @unittest.skipIf(not SM70OrLater, "triton")
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("reverse", [False, True])
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
+    @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
+    # Skipping the scan tests, as scan currently does not support inductor
+    @decorateIf(
+        unittest.skip,
+        lambda params: (params["compile_mode"] != "eager"),
+    )
+    def test_scan_init_autograd(self, reverse, compile_mode, device):
+        def add(x: torch.Tensor, y: torch.Tensor):
+            return x + y
+
+        torch.compiler.reset()
+        if compile_mode == "compile":
+            scan_fct = torch.compile(scan, fullgraph=True, dynamic=False)
+        elif compile_mode == "compile_dynamic_shape":
+            scan_fct = torch.compile(scan, fullgraph=True, dynamic=True)
+        elif compile_mode == "eager":
+            scan_fct = torch.compile(scan, fullgraph=True, backend="eager")
+        else:
+            scan_fct = scan
+
+        op, op_pt = (add, torch.cumsum)
+
+        # Internally in scan only init is used and no input
+        x = torch.randn(3, 1, 2, device=device, requires_grad=True)
+        dim = 1
+        init = torch._ops.ops.aten.slice(x, dim, 0, 1, 1)
+        result = scan_fct(op, input=init, dim=dim, reverse=reverse)
+        result_exp = _fake_scan(op, init, dim=dim, reverse=reverse)
+        result_init = scan_fct(op, input=[], dim=dim, reverse=reverse, init=init)
+        self.assertEqual(result, result_exp)
+        self.assertEqual(result_init, result_exp)
+        self.assertEqual(result_init, init)
+
+        grad_out = torch.ones_like(result)
+        grads = torch.autograd.grad(result, (init,), grad_out)
+        expected_grads = torch.autograd.grad(result_exp, (init,), grad_out)
+        self.assertEqual(expected_grads, grads)
+
+        # Input and init
+        dim = 0
+        op, op_pt = (add, torch.cumsum)
+        result = scan_fct(op, input=x, dim=dim, reverse=reverse)
+        result_exp = _fake_scan(op, x, dim=dim, reverse=reverse)
+
+        if reverse:
+            init_start, init_end = -1, None
+            inp_start, inp_end = 0, -1
+        else:
+            init_start, init_end = 0, 1
+            inp_start, inp_end = 1, None
+
+        init = torch._ops.ops.aten.slice(x, dim, init_start, init_end, 1)
+        inp = torch._ops.ops.aten.slice(x, dim, inp_start, inp_end, 1)
+
+        result_init = scan_fct(op, input=inp, dim=dim, reverse=reverse, init=init)
+
+        self.assertEqual(result, result_exp)
+        self.assertEqual(result_init, result_exp)
+        if not reverse:
+            result_exp_PT = op_pt(x, dim)
+            self.assertEqual(result, result_exp_PT)
+            self.assertEqual(result_init, result_exp_PT)
+
+        grad_out = torch.ones_like(result)
+        grads1 = torch.autograd.grad(result, (x,), grad_out)
+
+        grad_out = torch.ones_like(result_init)
+        grads21 = torch.autograd.grad(result_init, (inp,), grad_out, retain_graph=True)
+        grads22 = torch.autograd.grad(result_init, (init,), grad_out, retain_graph=True)
+        expected_grads = torch.autograd.grad(result_exp, (x,), grad_out)
+        self.assertEqual(expected_grads, grads1)
+        self.assertEqual(
+            tuple(
+                [
+                    torch._ops.ops.aten.slice(g, dim, init_start, init_end, 1)
+                    for g in expected_grads
+                ]
+            ),
+            grads22,
+        )
+        self.assertEqual(
+            tuple(
+                [
+                    torch._ops.ops.aten.slice(g, dim, inp_start, inp_end, 1)
+                    for g in expected_grads
+                ]
+            ),
+            grads21,
+        )
+
 
 @unittest.skipIf(IS_WINDOWS, "Windows not supported for this test")
 @skipIfNoDynamoSupport
