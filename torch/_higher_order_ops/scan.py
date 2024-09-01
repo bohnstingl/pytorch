@@ -433,15 +433,22 @@ class ScanAutogradOp(torch.autograd.Function):
         fw_graph,
         joint_graph,
         dim,
-        *input,
+        num_leaves,
+        *ops,
     ):
+        init = ops[:num_leaves]
+        input = ops[num_leaves:]
+
         ctx._joint_graph = joint_graph
         ctx._dim = dim
-        ctx._num_leaves = len(input)
-        ctx._num_elems = input[0].size()[dim]
+        ctx._num_leaves = num_leaves
+        ctx._num_elems = input[0].size()[dim] + 1
 
-        outs = generic_scan(fw_graph, input, dim)
-        ctx.save_for_backward(*(list(input) + outs))
+        outs = generic_scan(fw_graph, input, init, dim)
+        input_init = [
+            torch.concatenate([ini, inp], dim=dim) for ini, inp in zip(init, input)
+        ]
+        ctx.save_for_backward(*(input_init + list(outs)))
 
         return tuple(outs)
 
@@ -616,13 +623,14 @@ class ScanAutogradOp(torch.autograd.Function):
         grads = torch.split(
             torch.flip(torch.sum(helper1 * helper_mats, 0), [dim + 1]), 1, 0
         )
-        grads = tuple([torch.squeeze(g, 0) for g in grads])
+        grads_init = [aten.slice(torch.squeeze(g, 0), dim, 0, 1, 1) for g in grads]
+        grads = [aten.slice(torch.squeeze(g, 0), dim, 1, None, 1) for g in grads]
 
-        return None, None, None, *grads
+        return None, None, None, None, *tuple(grads_init + grads)
 
 
 @scan_op.py_impl(DispatchKey.Autograd)
-def scan_autograd(combine_fn, input, dim, reverse):
+def scan_autograd(combine_fn, input, init, dim):
     # A shortcut for the case where all inputs don't require gradient,
     # we skip tracing the forward and backward graph.
     if pytree.tree_all_only(
@@ -631,18 +639,21 @@ def scan_autograd(combine_fn, input, dim, reverse):
         (input,),
     ):
         with torch._C._AutoDispatchBelowAutograd():
-            return scan_op(combine_fn, input, dim)
+            return scan_op(combine_fn, input, init, dim)
 
     (
         fw_graph,
         joint_graph,
     ) = create_fw_bw_graph_combinefn(combine_fn, input, dim)
 
+    num_leaves = len(init)
+
     flat_out = ScanAutogradOp.apply(
         fw_graph,
         joint_graph,
         dim,
-        *input,
+        num_leaves,
+        *(init + input),
     )
     return flat_out
 
