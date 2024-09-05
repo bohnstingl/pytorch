@@ -444,13 +444,15 @@ class ScanAutogradOp(torch.autograd.Function):
         ctx._num_leaves = num_leaves
         ctx._num_elems = input[0].size()[dim] + 1
 
-        outs = generic_scan(fw_graph, input, init, dim)
-        input_init = [
-            torch.concatenate([ini, inp], dim=dim) for ini, inp in zip(init, input)
-        ]
-        ctx.save_for_backward(*(input_init + list(outs)))
+        with torch._C._AutoDispatchBelowAutograd():
+            outs = scan_op(fw_graph, input, init, dim)
+            # outs = generic_scan(fw_graph, input, init, dim)
+            input_init = [
+                torch.concatenate([ini, inp], dim=dim) for ini, inp in zip(init, input)
+            ]
+            ctx.save_for_backward(*(input_init + list(outs)))
 
-        return tuple(outs)
+            return tuple(outs)
 
     @staticmethod
     def backward(ctx, *flat_grads):
