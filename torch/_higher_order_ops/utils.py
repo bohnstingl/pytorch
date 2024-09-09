@@ -318,9 +318,12 @@ def create_fw_bw_graph(fn, use_output_and_grad_bw, fw_inputs, fw_outputs):
             inputs = joint_operands_grads[num_grads:]
 
         joint = create_joint(prepare_fw_with_masks(fn), aot_config=dummy_aot_config)
+        grads_flatten, grad_spec = pytree.tree_flatten(grads)
         _, grads = joint(
             list(inputs),
             [grad for grad in grads if grad is not None and grad.requires_grad],
+            # pytree.tree_unflatten([grad for grad in grads_flatten if grad is not None and grad.requires_grad], grad_spec),
+            # pytree.tree_unflatten([grad for grad in grads if grad is not None and grad.requires_grad], None),
         )
 
         # In order to keep map functional for backward graph,
