@@ -205,7 +205,7 @@ def scan(
             )
 
         # There are no pytree restrictions on the second output of the operator
-        out_leaves, tree_out = pytree.tree_flatten(out[1])
+        _, tree_out = pytree.tree_flatten(out[1])
 
         combine_fn = functools.partial(
             wrap_combine_fn_flat,
@@ -337,6 +337,14 @@ def make_expanded_output_shape(dim, scan_length, shapes, use_sh=False):
     ]
     return expanded_shapes
 
+def scanned_stack_to_return_list():
+    pass
+
+def return_list_to_stack(stacked_list, target_dim, num_scanned=None, squeeze_dims=(0,)):
+    if num_scanned is None:
+        num_scanned = stacked_list.shape[0]
+    return [torch.cat([torch.squeeze(v, squeeze_dims) for v in torch.tensor_split(vals, num_scanned, dim=0)], dim=target_dim) for vals in stacked_list]
+
 
 def trace_scan(
     proxy_mode,
@@ -422,7 +430,11 @@ def trace_scan(
             pytree.tree_map(expand_tensor, t.meta["val"], sh)
             for t, sh in zip(outputs[1], fake_out_shapes)
         ]
-        out = (init, expanded_outs)
+        
+        if return_all_carries:
+            out = None
+        else:
+            out = (init, expanded_outs)
 
     return track_tensor_tree(out, out_proxy, constant=None, tracer=proxy_mode.tracer)
 
@@ -488,7 +500,9 @@ class ScanAutogradOp(torch.autograd.Function):
                 return (
                         # *[c[0 if reverse else -1, :] for c in carries],
                         *[c[-1, :] for c in carries],
-                        *[torch.cat([torch.squeeze(os, 0) for os in torch.tensor_split(o, num_elems, dim=0)], dim=dim) for o in outs])
+                        # *[torch.cat([torch.squeeze(os, 0) for os in torch.tensor_split(o, num_elems, dim=0)], dim=dim) for o in outs]
+                        *return_list_to_stack(outs, dim)
+                        )
 
     @staticmethod
     def backward(ctx, *flat_grads):
@@ -646,10 +660,14 @@ def scan_fake_tensor_mode(mode, combine_fn, init, xs, dim, reverse):
             tuple(-1 if i != dim else dim_len for i, sh in enumerate(o.size()))
             for o in outputs
         ]
-        out = (
-            carry,
-            tuple(t.expand(*sh).clone() for t, sh in zip(outputs, fake_out_shapes)),
-        )
+        
+        if return_all_carries:
+            out = None
+        else:
+            out = (
+                carry,
+                tuple(t.expand(*sh).clone() for t, sh in zip(outputs, fake_out_shapes)),
+            )
         return out
 
 

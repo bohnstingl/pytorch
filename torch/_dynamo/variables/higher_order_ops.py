@@ -1290,16 +1290,21 @@ class ScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
                     for o in combine_result.items[1].items
                 ],
             )
+            
             out_meta = (
-                [init_p.node.meta["example_value"].clone() for init_p in init_proxy],
-                list(  # noqa: C400
-                    t.as_proxy()
-                    .node.meta["example_value"]
-                    .expand(*sh)
-                    .clone(memory_format=torch.contiguous_format)
-                    for t, sh in zip(combine_result.items[1].items, fake_out_shapes)
-                ),
-            )
+                    [init_p.node.meta["example_value"].clone() for init_p in init_proxy],
+                    list(  # noqa: C400
+                        t.as_proxy()
+                        .node.meta["example_value"]
+                        .expand(*sh)
+                        .clone(memory_format=torch.contiguous_format)
+                        for t, sh in zip(combine_result.items[1].items, fake_out_shapes)
+                    ),
+                )
+            
+            if return_all_carries:
+                out_meta_carry = [c.expand(scan_length, *c.shape) for c in out_meta[0]]
+                out_meta = [for o in out_meta[1]]
 
         return wrap_fx_proxy(
             tx=tx,
