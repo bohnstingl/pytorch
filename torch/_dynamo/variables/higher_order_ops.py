@@ -1273,7 +1273,7 @@ class ScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
             init_proxy,
             xs_proxy,
             dim.as_proxy(),
-            reverse.as_proxy(),
+            reverse.as_proxy()
         )
 
         with tx.fake_mode:
