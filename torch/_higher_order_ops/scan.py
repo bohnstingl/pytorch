@@ -95,8 +95,7 @@ def scan(
     /,
     *,
     dim: int = 0,
-    reverse: bool = False,
-    return_all_carries : bool = False
+    reverse: bool = False
 ) -> Tuple[pytree.PyTree, pytree.PyTree]:
     r"""
     Performs an inclusive scan with a combine function.
@@ -242,10 +241,6 @@ scan_op = ScanOp()
 def generic_scan(operator, init, xs, dim=0, reverse=False):
     def _scan(init, xs):
         """Perform scan on `elems` using `elems_init."""
-        carry = init
-        if len(xs) == 0:
-            return carry, []
-
         num_elems = xs[0].shape[dim]
         if reverse:
             ind = num_elems - 1
@@ -265,7 +260,7 @@ def generic_scan(operator, init, xs, dim=0, reverse=False):
             *[
                 [
                     torch.zeros(
-                        [num_elems] + list(e.size()) if return_all_carries else list(e.size())[:dim] + [list(e.size())[dim] * num_elems] + list(e.size())[dim + 1 :],
+                        list(e.size())[:dim] + [list(e.size())[dim] * num_elems] + list(e.size())[dim + 1 :],
                         dtype=e.dtype,
                         device=e.device,
                     ),
@@ -287,7 +282,6 @@ def generic_scan(operator, init, xs, dim=0, reverse=False):
                 for i, e in enumerate(dummy_out)
             ]
         )
-
         def store_in_mat(mat, out, d, index, index_modifier):
             # Store the intermediate out in the outs matrix
             for o, x, idx in zip(mat, out, index):
@@ -354,7 +348,6 @@ def trace_scan(
     xs: List[torch.Tensor],
     dim: int,
     reverse: bool,
-    return_all_carries: bool,
 ):
     with disable_proxy_modes_tracing():
         sample_inits = [
@@ -431,10 +424,7 @@ def trace_scan(
             for t, sh in zip(outputs[1], fake_out_shapes)
         ]
         
-        if return_all_carries:
-            out = None
-        else:
-            out = (init, expanded_outs)
+        out = (init, expanded_outs)
 
     return track_tensor_tree(out, out_proxy, constant=None, tracer=proxy_mode.tracer)
 
@@ -454,7 +444,6 @@ class ScanAutogradOp(torch.autograd.Function):
         joint_graph,
         dim,
         reverse,
-        return_all_carries,
         num_leaves_init,
         *ops,
     ):
@@ -468,10 +457,9 @@ class ScanAutogradOp(torch.autograd.Function):
         ctx._num_leaves_init = num_leaves_init
         ctx._num_leaves_input = len(input)
         ctx._num_elems = num_elems
-        ctx._return_all_carries = return_all_carries
 
         with torch._C._AutoDispatchBelowAutograd():
-            carries, outs = scan_op(fw_graph, init, input, dim, reverse, return_all_carries = True)
+            carries, outs = scan_op(fw_graph, init, input, dim, reverse)
             
             # Here the 0-th dim is always the of num_elems
             ctx.save_for_backward(*(init + input + carries))
@@ -494,15 +482,12 @@ class ScanAutogradOp(torch.autograd.Function):
             
             # print([(e, e.shape) for e in (*g_init, *g_outs)])
             
-            if return_all_carries:
-                return (*carries, *outs)
-            else:
-                return (
-                        # *[c[0 if reverse else -1, :] for c in carries],
-                        *[c[-1, :] for c in carries],
-                        # *[torch.cat([torch.squeeze(os, 0) for os in torch.tensor_split(o, num_elems, dim=0)], dim=dim) for o in outs]
-                        *return_list_to_stack(outs, dim)
-                        )
+            return (
+                    # *[c[0 if reverse else -1, :] for c in carries],
+                    *[c[-1, :] for c in carries],
+                    # *[torch.cat([torch.squeeze(os, 0) for os in torch.tensor_split(o, num_elems, dim=0)], dim=dim) for o in outs]
+                    *return_list_to_stack(outs, dim)
+                    )
 
     @staticmethod
     def backward(ctx, *flat_grads):
@@ -575,7 +560,6 @@ class ScanAutogradOp(torch.autograd.Function):
         num_leaves_init = ctx._num_leaves_init
         num_leaves_input = ctx._num_leaves_input
         num_elems = ctx._num_elems
-        return_all_carries = ctx._return_all_carries
         
         # Retrieve the forward inputs and the forward outputs
         operands_outs = ctx.saved_tensors
@@ -598,14 +582,13 @@ class ScanAutogradOp(torch.autograd.Function):
             input_bwd = (*g_ys_rearranged, 
                          *carries_rearranged, 
                          *input_rearranged)
-            g_init, g_outs = scan_op(joint_graph, init=g_carry, input=input_bwd, dim=0, reverse=True, return_all_carries=True)
+            g_init, g_outs = scan_op(joint_graph, init=g_carry, input=input_bwd, dim=0, reverse=True)
             
             if reverse:
                 g_outs = [torch.flip(g, [0]) for g in g_outs]
             
-            if not return_all_carries:
-                g_init = [g[-1, :] for g in g_init]
-                g_outs = [torch.cat([torch.squeeze(go, (0, 1)) for go in torch.tensor_split(go, ctx._num_elems, dim=0)], dim=dim) for go in g_outs]
+            g_init = [g[-1, :] for g in g_init]
+            g_outs = [torch.cat([torch.squeeze(go, (0, 1)) for go in torch.tensor_split(go, ctx._num_elems, dim=0)], dim=dim) for go in g_outs]
             
             # print([(e, e.shape) for e in (*g_init, *g_outs)])
 
@@ -613,7 +596,7 @@ class ScanAutogradOp(torch.autograd.Function):
 
 
 @scan_op.py_impl(DispatchKey.Autograd)
-def scan_autograd(combine_fn, init, input, dim, reverse, return_all_carries):
+def scan_autograd(combine_fn, init, input, dim, reverse):
     # A shortcut for the case where all inputs don't require gradient,
     # we skip tracing the forward and backward graph.
     if pytree.tree_all_only(
@@ -622,7 +605,7 @@ def scan_autograd(combine_fn, init, input, dim, reverse, return_all_carries):
         (init,input),
     ):
         with torch._C._AutoDispatchBelowAutograd():
-            return scan_op(combine_fn, init, input, dim, reverse, return_all_carries=return_all_carries)
+            return scan_op(combine_fn, init, input, dim, reverse)
 
     (
         fw_graph,
@@ -637,7 +620,6 @@ def scan_autograd(combine_fn, init, input, dim, reverse, return_all_carries):
         joint_graph,
         dim,
         reverse,
-        return_all_carries,
         num_leaves_init,
         *(init + input),
     )
@@ -661,13 +643,10 @@ def scan_fake_tensor_mode(mode, combine_fn, init, xs, dim, reverse):
             for o in outputs
         ]
         
-        if return_all_carries:
-            out = None
-        else:
-            out = (
-                carry,
-                tuple(t.expand(*sh).clone() for t, sh in zip(outputs, fake_out_shapes)),
-            )
+        out = (
+            carry,
+            tuple(t.expand(*sh).clone() for t, sh in zip(outputs, fake_out_shapes)),
+        )
         return out
 
 
