@@ -269,7 +269,6 @@ def prepare_fw_with_masks(fn):
             True if isinstance(ret, torch.Tensor) and ret.requires_grad else False
             for ret in fw_out_flat
         ]
-        # return fw_out, pytree.tree_unflatten(fw_out_grad, tree_spec)
         return fw_out_flat, fw_out_grad
 
     return fw_with_masks
@@ -318,7 +317,6 @@ def create_fw_bw_graph(fn, use_output_and_grad_bw, fw_inputs, fw_outputs):
             inputs = joint_operands_grads[num_grads:]
 
         joint = create_joint(prepare_fw_with_masks(fn), aot_config=dummy_aot_config)
-        grads_flatten, grad_spec = pytree.tree_flatten(grads)
         _, grads = joint(
             list(inputs),
             [grad for grad in grads if grad is not None and grad.requires_grad],

@@ -26,7 +26,7 @@ from torch.fx.experimental.proxy_tensor import (
     track_tensor_tree,
 )
 from torch.utils._python_dispatch import _get_current_dispatch_mode
-from .utils import _from_fun, create_fw_bw_graph
+from .utils import _from_fun, create_fw_bw_graph, _maybe_reenter_make_fx
 
 
 aten = torch._ops.ops.aten
@@ -53,14 +53,19 @@ def _extract_carry_and_out(flat_out: List[Any], num_carry: int):
 
 def create_fw_bw_graph_combinefn(combine_fn, init, input, dim):
     # See Note [HOP create fw_bw graph] in create_fw_bw_graph in utils.py
+    
+    def wrapper_combine_fn(*args):
+        new_carry, y = _extract_carry_and_out(combine_fn(*args), len(init))
+        return [*new_carry, *new_carry, *y]
 
     with suspend_functionalization(), disable_functional_mode():
         with disable_proxy_modes_tracing():
+            num_init = len(init)
+            
             fw_init = [pytree.tree_map(_from_fun, x) for x in init]
-            # fw_input = [aten.slice(pytree.tree_map(_from_fun, x), dim, 0, 1, 1) for x in input]
-            fw_input = [pytree.tree_map(_from_fun, aten.slice(x, dim, 0, 1, 1)) for x in input]
+            fw_input = [pytree.tree_map(_from_fun, x.select(dim, 0)) for x in input]
 
-            carry, outs = combine_fn(*fw_init, *fw_input)
+            carry, outs = _extract_carry_and_out(wrapper_combine_fn(*fw_init, *fw_input), num_init)
             fw_carry, fw_outputs = [pytree.tree_map(_from_fun, c) for c in carry], [pytree.tree_map(_from_fun, o) for o in outs]
             if any(carry.shape != ini.shape for carry, ini in zip(fw_carry, init)):
                 raise RuntimeError(
@@ -81,10 +86,9 @@ def create_fw_bw_graph_combinefn(combine_fn, init, input, dim):
             # TODO: There is a major issue that the create_fw_bw in the higher_order_op is invoked twice:
             # Once in the forward path (as it should) and once in the backward path, where it shouldn't be called
             # If we can get rid of the second invokation, it would simplify this function
-            fw_graph, joint_graph = create_fw_bw_graph(
-                # combine_fn, False, (fw_init, fw_input), (fw_carry, fw_outputs)
-                combine_fn, False, (*fw_init, *fw_input), (*fw_carry, *fw_outputs)
-                # combine_fn, False, (*fw_init, *fw_input), (fw_carry, fw_outputs)
+            fw_graph = _maybe_reenter_make_fx(wrapper_combine_fn)(*fw_init, *fw_input)
+            _, joint_graph = create_fw_bw_graph(
+                combine_fn, False, (*fw_init, *fw_input), (*fw_carry, *fw_outputs[num_init:])
             )
 
         return fw_graph, joint_graph
@@ -238,7 +242,9 @@ class ScanOp(HigherOrderOperator):
 scan_op = ScanOp()
 
 
-def generic_scan(operator, init, xs, dim=0, reverse=False):
+def generic_scan(operator, init, xs, dim=0, reverse=False, additional_inputs=None):
+    additional_inputs = additional_inputs or []
+    
     def _scan(init, xs):
         """Perform scan on `elems` using `elems_init."""
         carry = init
@@ -246,11 +252,7 @@ def generic_scan(operator, init, xs, dim=0, reverse=False):
             return carry, []
 
         num_elems = xs[0].shape[dim]
-        if reverse:
-            ind = num_elems - 1
-        else:
-            ind = 0
-
+        
         # Compute dummy shapes for the pre-allocation
         num_init_leaves = len(init)
         dummy_carry, dummy_out = _extract_carry_and_out(
@@ -261,7 +263,6 @@ def generic_scan(operator, init, xs, dim=0, reverse=False):
             ),
             num_init_leaves,
         )
-        output_scanned_dim = dummy_out[0].shape[dim]
 
         # Pre-alocate
         # outs -> Output matrix
@@ -270,37 +271,16 @@ def generic_scan(operator, init, xs, dim=0, reverse=False):
             *[
                 [
                     torch.zeros(
-                        list(e.size())[:dim]
-                        + [list(e.size())[dim] * num_elems]
-                        + list(e.size())[dim + 1 :],
+                        list(e.size())[:dim] + [num_elems] + list(e.size())[dim:],
                         dtype=e.dtype,
                         device=e.device,
                     ),
-                    # torch.cat(
-                    #     [
-                    #         id * t
-                    #         for id, t in zip(
-                    #             range(output_scanned_dim),
-                    #             torch.tensor_split(
-                    #                 torch.ones_like(e, dtype=torch.int64),
-                    #                 output_scanned_dim,
-                    #                 dim=dim,
-                    #             ),
-                    #         )
-                    #     ],
-                    #     dim,
-                    # ),
                     torch.ones_like(e, dtype=torch.int64).unsqueeze(dim),
                 ]
                 for i, e in enumerate(dummy_out)
             ]
         )
         
-        # def store_in_mat(mat, out, d, index, index_modifier):
-        #     # Store the intermediate out in the outs matrix
-        #     for o, x, idx in zip(mat, out, index):
-        #         o.scatter_(d, idx + index_modifier, x)
-
         def store_out_in_outs(out, ind):
             # Store the intermediate out in the outs matrix
             for o, x, idx in zip(outs, out, outs_idxs):
@@ -444,49 +424,45 @@ class ScanAutogradOp(torch.autograd.Function):
         dim,
         reverse,
         num_leaves_init,
+        additional_inputs,
         *ops,
     ):
         init = ops[:num_leaves_init]
-        input = ops[num_leaves_init:]
-        num_elems = input[0].shape[dim]
+        xs = ops[num_leaves_init:]
 
         ctx._joint_graph = joint_graph
         ctx._dim = dim
         ctx._reverse = reverse
         ctx._num_leaves_init = num_leaves_init
-        ctx._num_leaves_input = len(input)
-        ctx._num_elems = num_elems
+        ctx._num_leaves_xs = len(xs)
 
         with torch._C._AutoDispatchBelowAutograd():
-            carries, outs = scan_op(fw_graph, init, input, dim, reverse)
+            carry, carries_outs = _extract_carry_and_out(scan_op(fw_graph, init, xs, dim, reverse, additional_inputs), num_leaves_init)
             
-            # Here the 0-th dim is always the of num_elems
-            ctx.save_for_backward(*(init + input + carries))
+            # Collect the carries for each time step from the outs
+            carries = carries_outs[:num_leaves_init]
+            outs = carries_outs[num_leaves_init:]
             
-            # carries_rearranged = [torch.cat([torch.unsqueeze(i, 0), c[:-1]], dim=0) for i, c in zip(init, carries)]
-            # input_rearranged = [torch.flip(torch.cat([torch.unsqueeze(i, 0) for i in torch.tensor_split(inp, num_elems, dim=dim)], dim=0), [0]) for inp in input]
+            ctx.save_for_backward(*(init + xs + tuple(carries) + tuple(additional_inputs)))
             
-            # init_bwd = [torch.ones_like(i) for i in init]
-            # input_bwd = (*[torch.ones_like(y) for y in outs], 
-            #              *carries_rearranged, 
-            #              *input_rearranged)
-            # g_init, g_outs = scan_op(joint_graph, init=init_bwd, input=input_bwd, dim=0, reverse=True, return_all_carries=True)
-            # g_outs = [torch.flip(g, [0]) for g in g_outs]
+            if reverse:
+                carries_augmented = [torch.cat([torch.unsqueeze(i, dim), c[1:]], dim=dim) for i, c in zip(init, carries)]
+                xs = [torch.flip(x, [dim]) for x in xs]
+            else:
+                carries_augmented = [torch.cat([torch.unsqueeze(i, dim), c[:-1]], dim=dim) for i, c in zip(init, carries)]
+                
+            init_bwd = [torch.ones_like(i) for i in init]
+            xs_bwd = (*[torch.ones_like(y) for y in outs], 
+                         *carries_augmented, 
+                         *xs)
+            g_init, g_outs = _extract_carry_and_out(scan_op(joint_graph, init_bwd, xs_bwd, dim, True, additional_inputs), num_leaves_init)
             
-            
-            # if not return_all_carries:
-            #     g_init = [g[-1, :] for g in g_init]
-            #     g_outs = [torch.cat([torch.squeeze(go, 0) for go in torch.tensor_split(go, ctx._num_elems, dim=0)], dim=dim) for go in g_outs]
-            
+            if reverse:
+                g_outs = [torch.flip(g, [dim]) for g in g_outs]
             
             # print([(e, e.shape) for e in (*g_init, *g_outs)])
             
-            return (
-                    # *[c[0 if reverse else -1, :] for c in carries],
-                    *[c[-1, :] for c in carries],
-                    # *[torch.cat([torch.squeeze(os, 0) for os in torch.tensor_split(o, num_elems, dim=0)], dim=dim) for o in outs]
-                    *return_list_to_stack(outs, dim)
-                    )
+            return (*carry, *outs)
 
     @staticmethod
     def backward(ctx, *flat_grads):
@@ -555,39 +531,54 @@ class ScanAutogradOp(torch.autograd.Function):
 
         joint_graph = ctx._joint_graph
         dim = ctx._dim
-        reverse = ctx._reverse
         num_leaves_init = ctx._num_leaves_init
-        num_leaves_input = ctx._num_leaves_input
-        num_elems = ctx._num_elems
+        num_leaves_xs = ctx._num_leaves_xs
+        reverse = ctx._reverse
         
         # Retrieve the forward inputs and the forward outputs
         operands_outs = ctx.saved_tensors
         init = operands_outs[:num_leaves_init]
-        input = operands_outs[num_leaves_init:num_leaves_init+num_leaves_input]
-        carries = operands_outs[num_leaves_init+num_leaves_input:]
+        xs = operands_outs[num_leaves_init:num_leaves_init+num_leaves_xs]
+        carries = operands_outs[num_leaves_init+num_leaves_xs:2*num_leaves_init+num_leaves_xs]
+        additional_inputs = operands_outs[2*num_leaves_init+num_leaves_xs:]
 
         with torch._C._AutoDispatchBelowAutograd():
             g_carry = flat_grads[:num_leaves_init]
             g_ys = flat_grads[num_leaves_init:]
             
-            g_ys_rearranged = [torch.cat([torch.unsqueeze(g, 0) for g in torch.tensor_split(g_y, num_elems, dim=dim)], dim=0) for g_y in g_ys]
-            carries_rearranged = [torch.cat([torch.unsqueeze(i, 0), c[:-1]], dim=0) for i, c in zip(init, carries)]
+            # g_ys_rearranged = [torch.cat([torch.unsqueeze(g, 0) for g in torch.tensor_split(g_y, num_elems, dim=dim)], dim=0) for g_y in g_ys]
+            # carries_rearranged = [torch.cat([torch.unsqueeze(i, 0), c[:-1]], dim=0) for i, c in zip(init, carries)]
             
+            # if reverse:
+            #     input_rearranged = [torch.flip(torch.cat([torch.unsqueeze(i, 0) for i in torch.tensor_split(inp, num_elems, dim=dim)], dim=0), [0]) for inp in input]
+            # else:
+            #     input_rearranged = [torch.cat([torch.unsqueeze(i, 0) for i in torch.tensor_split(inp, num_elems, dim=dim)], dim=0) for inp in input]
+            
+            # input_bwd = (*g_ys_rearranged, 
+            #              *carries_rearranged, 
+            #              *input_rearranged)
+            # g_init, g_outs = scan_op(joint_graph, init=g_carry, input=input_bwd, dim=0, reverse=True)
+            
+            # if reverse:
+            #     g_outs = [torch.flip(g, [0]) for g in g_outs]
+            
+            # g_init = [g[-1, :] for g in g_init]
+            # g_outs = [torch.cat([torch.squeeze(go, (0, 1)) for go in torch.tensor_split(go, ctx._num_elems, dim=0)], dim=dim) for go in g_outs]
+            
+            # # print([(e, e.shape) for e in (*g_init, *g_outs)])
             if reverse:
-                input_rearranged = [torch.flip(torch.cat([torch.unsqueeze(i, 0) for i in torch.tensor_split(inp, num_elems, dim=dim)], dim=0), [0]) for inp in input]
+                carries_augmented = [torch.cat([torch.unsqueeze(i, dim), c[1:]], dim=dim) for i, c in zip(init, carries)]
+                xs = [torch.flip(x, [dim]) for x in xs]
             else:
-                input_rearranged = [torch.cat([torch.unsqueeze(i, 0) for i in torch.tensor_split(inp, num_elems, dim=dim)], dim=0) for inp in input]
+                carries_augmented = [torch.cat([torch.unsqueeze(i, dim), c[:-1]], dim=dim) for i, c in zip(init, carries)]
             
-            input_bwd = (*g_ys_rearranged, 
-                         *carries_rearranged, 
-                         *input_rearranged)
-            g_init, g_outs = scan_op(joint_graph, init=g_carry, input=input_bwd, dim=0, reverse=True)
+            xs_bwd = (*g_ys, 
+                      *carries_augmented, 
+                      *xs)
+            g_init, g_outs = _extract_carry_and_out(scan_op(joint_graph, g_carry, xs_bwd, dim, True, additional_inputs), num_leaves_init)
             
             if reverse:
-                g_outs = [torch.flip(g, [0]) for g in g_outs]
-            
-            g_init = [g[-1, :] for g in g_init]
-            g_outs = [torch.cat([torch.squeeze(go, (0, 1)) for go in torch.tensor_split(go, ctx._num_elems, dim=0)], dim=dim) for go in g_outs]
+                g_outs = [torch.flip(g, [dim]) for g in g_outs]
             
             # print([(e, e.shape) for e in (*g_init, *g_outs)])
 
@@ -595,24 +586,25 @@ class ScanAutogradOp(torch.autograd.Function):
 
 
 @scan_op.py_impl(DispatchKey.Autograd)
-def scan_autograd(combine_fn, init, input, dim, reverse):
+def scan_autograd(combine_fn, init, input, dim, reverse, additional_inputs):
     # A shortcut for the case where all inputs don't require gradient,
     # we skip tracing the forward and backward graph.
     if pytree.tree_all_only(
         torch.Tensor,
         lambda t: not t.requires_grad,  # type: ignore[union-attr]
-        (init,input),
+        (init, input),
     ):
         with torch._C._AutoDispatchBelowAutograd():
-            return scan_op(combine_fn, init, input, dim, reverse)
+            return scan_op(combine_fn, init, input, dim, reverse, additional_inputs)
 
+    num_leaves_init = len(init)
+    
     (
         fw_graph,
         joint_graph,
     # ) = create_fw_bw_graph_combinefn(combine_fn.keywords['combine_fn'], init, input, dim)
     ) = create_fw_bw_graph_combinefn(combine_fn, init, input, dim)
-
-    num_leaves_init = len(init)
+    # ) = create_fw_bw_graph_combinefn(wrapper_combine_fn, init, input, dim)
 
     flat_out = ScanAutogradOp.apply(
         fw_graph,
@@ -620,9 +612,10 @@ def scan_autograd(combine_fn, init, input, dim, reverse):
         dim,
         reverse,
         num_leaves_init,
+        additional_inputs,
         *(init + input),
     )
-    return flat_out[:num_leaves_init], flat_out[num_leaves_init:]
+    return *flat_out[:num_leaves_init], *flat_out[num_leaves_init:]
 
 
 @scan_op.py_impl(ProxyTorchDispatchMode)
