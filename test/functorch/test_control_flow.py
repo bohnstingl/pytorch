@@ -8,7 +8,7 @@ import torch.utils._pytree as pytree
 from functorch.experimental import control_flow
 from functorch.experimental.control_flow import cond, UnsupportedAliasMutationException
 from torch._higher_order_ops.associative_scan import associative_scan
-from torch._higher_order_ops.scan import scan
+from torch._higher_order_ops.scan import _fake_scan, scan
 from torch._higher_order_ops.while_loop import while_loop
 from torch._subclasses.functional_tensor import (
     CppFunctionalizeAPI,
@@ -109,48 +109,6 @@ def _fake_associative_scan(combine_fn, xs, dim, reverse=False):
         for leave_ind in range(num_leaves)
     ]
     return pytree.tree_unflatten(results, spec)
-
-
-def _fake_scan(combine_fn, init, xs=None, dim=0, reverse=False):
-    carry_leaves, carry_spec = pytree.tree_flatten(init)
-    inp_leaves, inp_spec = pytree.tree_flatten(xs)
-    if xs is None or len(inp_leaves) == 0:
-        return init, []
-    result_flat = []
-    carry = carry_leaves
-    op = reversed if reverse else lambda x: x
-
-    dummy_carry, dummy_out = combine_fn(
-        pytree.tree_unflatten(carry, carry_spec),
-        pytree.tree_unflatten(
-            [torch._ops.ops.aten.slice(elem, dim, 0, 1, 1) for elem in inp_leaves],
-            inp_spec,
-        ),
-    )
-    dummy_out_leaves, dummy_out_spec = pytree.tree_flatten(dummy_out)
-    num_leaves = len(dummy_out_leaves)
-
-    for ind in op(range(inp_leaves[0].size(dim))):
-        xs = [
-            torch._ops.ops.aten.slice(elem, dim, ind, ind + 1, 1) for elem in inp_leaves
-        ]
-
-        carry, y = combine_fn(
-            pytree.tree_unflatten(carry, carry_spec),
-            pytree.tree_unflatten(xs, inp_spec),
-        )
-        carry, _ = pytree.tree_flatten(carry)
-        y, _ = pytree.tree_flatten(y)
-        result_flat.append(y)
-
-    results = [
-        torch.concatenate([e[leave_ind] for e in op(result_flat)], dim)
-        for leave_ind in range(num_leaves)
-    ]
-    return (
-        pytree.tree_unflatten(carry, carry_spec),
-        pytree.tree_unflatten(results, dummy_out_spec),
-    )
 
 
 def compile_mode_helper(fct, compile_mode):
@@ -1393,12 +1351,12 @@ def forward(self, pred_1, x_1):
             (
                 get_scan_combine_fn("add", False),
                 torch.cumsum,
-                torch.zeros(1, 5, 7, device=device, requires_grad=autograd),
+                torch.zeros(5, 7, device=device, requires_grad=autograd),
             ),
             (
                 get_scan_combine_fn("mul", False),
                 torch.cumprod,
-                torch.ones(1, 5, 7, device=device, requires_grad=autograd),
+                torch.ones(5, 7, device=device, requires_grad=autograd),
             ),
         ]:
 
@@ -1437,12 +1395,14 @@ def forward(self, pred_1, x_1):
         )
         if not reverse:
             self.assertEqual(
-                cumsum1[1], torch.tensor([0.0, 1.0, 3.0, 6.0], dtype=torch.int64)
+                cumsum1[1],
+                torch.tensor([[0.0], [1.0], [3.0], [6.0]], dtype=torch.int64),
             )
             self.assertEqual(cumsum1[0], torch.tensor([6.0], dtype=torch.int64))
         else:
             self.assertEqual(
-                cumsum1[1], torch.tensor([6.0, 6.0, 5.0, 3.0], dtype=torch.int64)
+                cumsum1[1],
+                torch.tensor([[6.0], [6.0], [5.0], [3.0]], dtype=torch.int64),
             )
             self.assertEqual(cumsum1[0], torch.tensor([6.0], dtype=torch.int64))
         self.assertEqual(cumsum1, cumsum_exp)
@@ -1454,12 +1414,14 @@ def forward(self, pred_1, x_1):
         result_exp = _fake_scan(add2, init=init, xs=x, dim=0, reverse=reverse)
         if not reverse:
             self.assertEqual(
-                result[1], torch.tensor([2.0, 3.0, 5.0, 10.0], dtype=torch.int64)
+                result[1],
+                torch.tensor([[2.0], [3.0], [5.0], [10.0]], dtype=torch.int64),
             )
             self.assertEqual(result[0], torch.tensor([24.0], dtype=torch.int64))
         else:
             self.assertEqual(
-                result[1], torch.tensor([25.0, 14.0, 7.0, 5.0], dtype=torch.int64)
+                result[1],
+                torch.tensor([[25.0], [14.0], [7.0], [5.0]], dtype=torch.int64),
             )
             self.assertEqual(result[0], torch.tensor([24.0], dtype=torch.int64))
         self.assertEqual(result, result_exp)
@@ -1513,7 +1475,7 @@ def forward(self, pred_1, x_1):
         x = torch.randn(3, 10, 2, device=device).to(dtype=dtype)
         op, init = (
             get_scan_combine_fn("adds"),
-            torch.zeros(1, 10, 2, device=device, dtype=dtype),
+            torch.zeros(10, 2, device=device, dtype=dtype),
         )
         result = scan_fct(op, init, x, dim=0, reverse=reverse)
         result_exp = _fake_scan(op, init=init, xs=x, dim=0, reverse=reverse)
@@ -1532,7 +1494,7 @@ def forward(self, pred_1, x_1):
         x = torch.randn(3, 10, 2, device=device).to(dtype=dtype)
         op, init = (
             get_scan_combine_fn("adds"),
-            torch.zeros(1, 10, 2, device=device, dtype=torch.float32),
+            torch.zeros(10, 2, device=device, dtype=torch.float32),
         )
         result = scan_fct(op, init, x, dim=0, reverse=reverse)
         result_exp = _fake_scan(op, init=init, xs=x, dim=0, reverse=reverse)
@@ -1550,7 +1512,7 @@ def forward(self, pred_1, x_1):
         x = torch.randn(3, 10, 2, device=device)
         op, init = (
             get_scan_combine_fn("adds"),
-            torch.zeros(1, 10, 2, device=device, dtype=dtype),
+            torch.zeros(10, 2, device=device, dtype=dtype),
         )
         result = scan_fct(op, init, x, dim=0, reverse=reverse)
         result_exp = _fake_scan(op, init=init, xs=x, dim=0, reverse=reverse)
@@ -1612,8 +1574,7 @@ def forward(self, pred_1, x_1):
             shapes = [random.randint(1, 10) for _ in range(num_dim)]
             rnd_scan_dim = random.randint(0, num_dim - 1)
             x = torch.randn(*shapes, device=device)
-            init_shapes = shapes
-            init_shapes[rnd_scan_dim] = 1
+            init_shapes = shapes[:rnd_scan_dim] + shapes[rnd_scan_dim + 1 :]
 
             for op, op_pt, init in [
                 (
@@ -2075,7 +2036,7 @@ def forward(self, pred_1, x_1):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     def test_scan_downstream_scan_matmul(self, compile_mode, reverse, device):
         inp = torch.randn(3, 10, 2, device=device)
-        init = torch.randn(3, 1, 2, device=device)
+        init = torch.randn(3, 2, device=device)
 
         for ind in range(2):
             # Chain with matmul
@@ -2109,7 +2070,7 @@ def forward(self, pred_1, x_1):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     def test_scan_downstream_scan_scan(self, compile_mode, reverse, device):
         inp = torch.randn(3, 10, 2, device=device)
-        init = torch.randn(3, 1, 2, device=device)
+        init = torch.randn(3, 2, device=device)
 
         # Chain with scan
         def chain_fct_same_dim(inp):
@@ -2154,7 +2115,7 @@ def forward(self, pred_1, x_1):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     def test_scan_downstream_scan_scan_dim(self, compile_mode, reverse, device):
         inp = torch.randn(3, 10, 2, device=device)
-        init = torch.randn(3, 1, 2, device=device)
+        init = torch.randn(3, 2, device=device)
 
         # Chain with scan on different dim
         init2 = torch.randn(1, 10, 2, device=device)
@@ -2248,7 +2209,7 @@ def forward(self, pred_1, x_1):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     def test_scan_non_pointwise(self, reverse, device):
         x = torch.randn(3, 10, 2, device=device)
-        init = torch.randn(1, 10, 2, device=device)
+        init = torch.randn(10, 2, device=device)
         result_expected = _fake_scan(
             get_scan_combine_fn("non_pointwise", False),
             init=init,
@@ -2278,7 +2239,7 @@ def forward(self, pred_1, x_1):
         with torch._dynamo.config.patch(automatic_dynamic_shapes=True):
             cnt = CompileCounter()
             x = torch.randn(3, 2, 5, device=device)
-            init = torch.randn(3, 1, 5, device=device)
+            init = torch.randn(3, 5, device=device)
             # First compilation step
             torch.compile(scan, backend=cnt)(
                 get_scan_combine_fn("add", False),
@@ -2290,7 +2251,7 @@ def forward(self, pred_1, x_1):
             self.assertEqual(cnt.frame_count, 1)
 
             x = torch.randn(3, 20, 5, device=device)
-            init = torch.randn(3, 1, 5, device=device)
+            init = torch.randn(3, 5, device=device)
             # Recompilation due to first different size
             torch.compile(scan, backend=cnt)(
                 get_scan_combine_fn("add", False),
@@ -2302,7 +2263,7 @@ def forward(self, pred_1, x_1):
             self.assertEqual(cnt.frame_count, 2)
 
             x = torch.randn(3, 40, 5, device=device)
-            init = torch.randn(3, 1, 5, device=device)
+            init = torch.randn(3, 5, device=device)
             # No recompilation, because of dynamic shape
             torch.compile(scan, backend=cnt)(
                 get_scan_combine_fn("add", False),
@@ -2314,7 +2275,7 @@ def forward(self, pred_1, x_1):
             self.assertEqual(cnt.frame_count, 2)
 
             x = torch.randn(3, 40, 5, device=device)
-            init = torch.randn(3, 40, 1, device=device)
+            init = torch.randn(3, 40, device=device)
             # Recompilation because of dim change
             torch.compile(scan, backend=cnt)(
                 get_scan_combine_fn("add", False),
@@ -2326,7 +2287,7 @@ def forward(self, pred_1, x_1):
             self.assertEqual(cnt.frame_count, 3)
 
             x = torch.randn(3, 40, 20, device=device)
-            init = torch.randn(3, 40, 1, device=device)
+            init = torch.randn(3, 40, device=device)
             # Recompilation due to first different size on new dim
             torch.compile(scan, backend=cnt)(
                 get_scan_combine_fn("add", False),
@@ -2338,7 +2299,7 @@ def forward(self, pred_1, x_1):
             self.assertEqual(cnt.frame_count, 4)
 
             x = torch.randn(3, 40, 40, device=device)
-            init = torch.randn(3, 40, 1, device=device)
+            init = torch.randn(3, 40, device=device)
             # No recompilation, because of dynamic shape on new dim
             torch.compile(scan, backend=cnt)(
                 get_scan_combine_fn("add", False),
@@ -2350,7 +2311,7 @@ def forward(self, pred_1, x_1):
             self.assertEqual(cnt.frame_count, 4)
 
             x = torch.randn(3, 60, 40, device=device)
-            init = torch.randn(3, 1, 40, device=device)
+            init = torch.randn(3, 40, device=device)
             # Recompilation because of dim change
             torch.compile(scan, backend=cnt)(
                 get_scan_combine_fn("add", False),
@@ -2362,7 +2323,7 @@ def forward(self, pred_1, x_1):
             self.assertEqual(cnt.frame_count, 5)
 
             x = torch.randn(3, 60, 40, device=device)
-            init = torch.randn(3, 1, 40, device=device)
+            init = torch.randn(3, 40, device=device)
             # Recompilation because of reverse change
             torch.compile(scan, backend=cnt)(
                 get_scan_combine_fn("add", False),
@@ -2374,7 +2335,7 @@ def forward(self, pred_1, x_1):
             self.assertEqual(cnt.frame_count, 6)
 
             x = torch.randn(3, 60, 40, device=device)
-            init = torch.randn(3, 1, 40, device=device)
+            init = torch.randn(3, 40, device=device)
             # No recompilation, as nothing changed
             torch.compile(scan, backend=cnt)(
                 get_scan_combine_fn("add", False),
@@ -2386,7 +2347,7 @@ def forward(self, pred_1, x_1):
             self.assertEqual(cnt.frame_count, 6)
 
             x = torch.randn(3, 120, 80, device=device)
-            init = torch.randn(3, 1, 80, device=device)
+            init = torch.randn(3, 80, device=device)
             # No recompilation, final test
             torch.compile(scan, backend=cnt)(
                 get_scan_combine_fn("add", False),
@@ -2406,7 +2367,7 @@ def forward(self, pred_1, x_1):
 
         # Only init and no input
         x = torch.randn(3, 1, 2, device=device)
-        init = torch.randn(3, 1, 2, device=device)
+        init = torch.randn(3, 2, device=device)
         dim = 1
 
         # Scan dimension is 0
@@ -2431,14 +2392,9 @@ def forward(self, pred_1, x_1):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     def test_scan_init_non_tensor(self, reverse, compile_mode, device):
         scan_fct = compile_mode_helper(scan, compile_mode)
-
-        # Only init and no input
         x = torch.randn(3, 1, 2, device=device)
-        init = torch.randn(3, 1, 2, device=device)
         dim = 1
-
         # Init is a float and not a tensor
-        inp = torch._ops.ops.aten.slice(x, dim, 1, None, 1)
         init = 1.0
         with self.assertRaisesRegex(
             # Should be: RuntimeError, "Init leaves must be a Tensor"
@@ -2446,7 +2402,7 @@ def forward(self, pred_1, x_1):
             "Observed exception.*",
         ):
             result_init = scan_fct(
-                get_scan_combine_fn("add", False), init, inp, dim=dim, reverse=reverse
+                get_scan_combine_fn("add", False), init, x, dim=dim, reverse=reverse
             )
 
     @requires_cuda
@@ -2458,7 +2414,6 @@ def forward(self, pred_1, x_1):
 
         # Only init and no input
         x = torch.randn(3, 1, 2, device=device)
-        init = torch.randn(3, 1, 2, device=device)
         dim = 1
 
         # Init wrong shape (Other dim different)
@@ -2490,7 +2445,6 @@ def forward(self, pred_1, x_1):
 
         # Only init and no input
         x = torch.randn(3, 1, 2, device=device)
-        init = torch.randn(3, 1, 2, device=device)
         dim = 1
 
         # Init wrong pytree
@@ -2518,7 +2472,6 @@ def forward(self, pred_1, x_1):
 
         # Only init and no input
         x = torch.randn(3, 1, 2, device=device, requires_grad=autograd)
-        init = torch.randn(3, 1, 2, device=device, requires_grad=autograd)
         dim = 1
         op, op_pt = (get_scan_combine_fn("add", False), torch.cumsum)
 
@@ -2557,20 +2510,12 @@ def forward(self, pred_1, x_1):
         )
         self.assertEqual(result_init, result_exp)
         self.assertEqual(result_init[0], torch.tensor([3.0], device=device))
-        
-        # if autograd:
-        #     result_flat = pytree.tree_leaves(result_init)
-        #     result_exp_flat = pytree.tree_leaves(result_exp)
-        #     grad_out = [torch.ones_like(r) for r in result_exp_flat]
-        #     expected_grads = torch.autograd.grad(result_exp_flat, (init,inp), grad_out)
-        #     grads = torch.autograd.grad(result_flat, (init,inp), grad_out)
-        #     self.assertEqual(grads, expected_grads)
 
         # Init tensor entirely different shape than inp
-        init = torch.randn(7, 8, device=device, requires_grad=autograd)
+        init = torch.randn(7, 8, device=device)
 
         def add_scalar_carry2(x: torch.Tensor, y: torch.Tensor):
-            return x + 1.0, x[: y.shape[1], : y.shape[2]] + y
+            return x + 1.0, x[: y.shape[0], : y.shape[1]] + y
 
         result_init = scan_fct(add_scalar_carry2, init, inp, dim=dim, reverse=reverse)
         result_exp = _fake_scan(
@@ -2588,14 +2533,6 @@ def forward(self, pred_1, x_1):
         result_exp = _fake_scan(op, init=init, xs=inp, dim=dim, reverse=reverse)
         self.assertEqual(result_init, result_exp)
         self.assertEqual(result_init[0].shape, torch.Size([2, 5, 2]))
-        
-        # if autograd:
-        #     result_flat = pytree.tree_leaves(result_init)
-        #     result_exp_flat = pytree.tree_leaves(result_exp)
-        #     grad_out = [torch.ones_like(r) for r in result_exp_flat]
-        #     expected_grads = torch.autograd.grad(result_exp_flat, (init,inp), grad_out)
-        #     grads = torch.autograd.grad(result_flat, (init,inp), grad_out)
-        #     self.assertEqual(grads, expected_grads)
 
         init = torch.tile(init, (1, 2, 1))
 
@@ -2610,26 +2547,18 @@ def forward(self, pred_1, x_1):
         )
         self.assertEqual(result_init, result_exp)
         self.assertEqual(result_init[0].shape, torch.Size([2, 10, 2]))
-        self.assertEqual(result_init[1].shape, torch.Size([4, 5, 2]))
-        
-        # if autograd:
-        #     result_flat = pytree.tree_leaves(result_init)
-        #     result_exp_flat = pytree.tree_leaves(result_exp)
-        #     grad_out = [torch.ones_like(r) for r in result_exp_flat]
-        #     expected_grads = torch.autograd.grad(result_exp_flat, (init,inp), grad_out)
-        #     grads = torch.autograd.grad(result_flat, (init,inp), grad_out)
-        #     self.assertEqual(grads, expected_grads)
-            
+        self.assertEqual(result_init[1].shape, torch.Size([2, 2, 5, 2]))
+
         # Correct case
         op, op_pt = (get_scan_combine_fn("add", False), torch.cumsum)
-        x = torch.randn(3, 2, 2, device=device, requires_grad=autograd)
+        x = torch.randn(3, 2, 2, device=device)
         dim = 1
 
         if reverse:
-            init = torch.zeros_like(torch._ops.ops.aten.slice(x, dim, -1, None, 1), requires_grad=autograd)
+            init = torch.zeros_like(torch.select_copy(x, -1, 0))
             inp = torch._ops.ops.aten.slice(x, dim, 0, -1, 1)
         else:
-            init = torch.zeros_like(torch._ops.ops.aten.slice(x, dim, 0, 1, 1), requires_grad=autograd)
+            init = torch.zeros_like(torch.select_copy(x, 1, 0))
             inp = torch._ops.ops.aten.slice(x, dim, 1, None, 1)
 
         result = scan_fct(op, init, x, dim=dim, reverse=reverse)
@@ -2907,8 +2836,8 @@ def forward(self, pred_1, x_1):
         )
         expected_result_out = torch.permute(expected_result[0], (1, 0, 2))
         expected_result_state = torch.permute(expected_result[1], (1, 0, 2))
-        result = scan(RNN, h[:, 0:1, :], x, dim=dim)
-        self.assertEqual(result[0], expected_result_state)
+        result = scan(RNN, init=torch.select_copy(h, dim, 0), xs=x, dim=dim)
+        self.assertEqual(result[0].unsqueeze(0), expected_result_state)
         self.assertEqual(result[1], expected_result_out)
 
     @skipIfNoDynamoSupport
@@ -2989,20 +2918,16 @@ def forward(self, pred_1, x_1):
             gm.code.strip(),
             """\
 def forward(self, fct_1, init_1, xs_1):
-    slice_1 = torch.ops.aten.slice.Tensor(xs_1, 0, 0, 1)
-    add = torch.ops.aten.add.Tensor(init_1, slice_1);  add = None
-    add_1 = torch.ops.aten.add.Tensor(init_1, slice_1);  slice_1 = add_1 = None
-    sym_size_int = torch.ops.aten.sym_size.int(init_1, 1)
-    sym_size_int_1 = torch.ops.aten.sym_size.int(init_1, 2)
-    new_empty = torch.ops.aten.new_empty.default(init_1, [1, sym_size_int, sym_size_int_1], dtype = torch.float32, device = device(type='cpu'), pin_memory = False);  new_empty = None
-    new_empty_1 = torch.ops.aten.new_empty.default(xs_1, [1, sym_size_int, sym_size_int_1], dtype = torch.float32, device = device(type='cpu'), pin_memory = False);  sym_size_int = sym_size_int_1 = new_empty_1 = None
+    select = torch.ops.aten.select.int(xs_1, 0, 0)
+    add = torch.ops.aten.add.Tensor(init_1, select);  add = None
+    add_1 = torch.ops.aten.add.Tensor(init_1, select);  select = add_1 = None
+    clone = torch.ops.aten.clone.default(init_1);  clone = None
+    select_copy = torch.ops.aten.select_copy.int(xs_1, 0, 0);  select_copy = None
     scan_combine_graph_0 = self.scan_combine_graph_0
-    scan = torch.ops.higher_order.scan(scan_combine_graph_0, [init_1], [xs_1], 0, True);  scan_combine_graph_0 = init_1 = xs_1 = None
+    scan = torch.ops.higher_order.scan(scan_combine_graph_0, [init_1], [xs_1], 0, True, []);  scan_combine_graph_0 = init_1 = xs_1 = None
     getitem = scan[0]
-    getitem_1 = getitem[0];  getitem = None
-    getitem_2 = scan[1];  scan = None
-    getitem_3 = getitem_2[0];  getitem_2 = None
-    return (getitem_1, getitem_3)""",
+    getitem_1 = scan[1];  scan = None
+    return (getitem, getitem_1)""",  # noqa: B950
         )
 
         # Check graph
@@ -3016,19 +2941,18 @@ def forward(self, fct_1, init_1, xs_1):
 def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
     l_init_ = L_init_
     l_xs_ = L_xs_
-    slice_1 = torch.ops.aten.slice(l_xs_, 0, 0, 1, 1)
-    out_l = l_init_ + slice_1;  out_l = None
-    add_1 = l_init_ + slice_1;  slice_1 = add_1 = None
-    child = l_init_.new_empty((1, 10, 2), dtype = torch.float32, device = device(type='cpu'), requires_grad = False);  child = None
-    child_1 = l_xs_.new_empty((1, 10, 2), dtype = torch.float32, device = device(type='cpu'), requires_grad = False);  child_1 = None
+    select = l_xs_.select(0, 0)
+    out_l = l_init_ + select;  out_l = None
+    add_1 = l_init_ + select;  select = add_1 = None
+    child = l_init_.clone();  child = None
+    child_1 = torch.select_copy(l_xs_, 0, 0);  child_1 = None
     scan_combine_fn_0 = self.scan_combine_fn_0
-    scan = torch.ops.higher_order.scan(scan_combine_fn_0, [l_init_], [l_xs_], 0, True);  scan_combine_fn_0 = l_init_ = l_xs_ = None
+    scan = torch.ops.higher_order.scan(scan_combine_fn_0, [l_init_], [l_xs_], 0, True, []);  scan_combine_fn_0 = l_init_ = l_xs_ = None
     getitem = scan[0]
-    getitem_1 = getitem[0];  getitem = None
-    getitem_2 = scan[1];  scan = None
-    getitem_3 = getitem_2[0];  getitem_2 = None
-    return (getitem_1, getitem_3)""",
+    getitem_1 = scan[1];  scan = None
+    return (getitem, getitem_1)""",  # noqa: B950
         )
+
 
 @unittest.skipIf(IS_WINDOWS, "Windows not supported for this test")
 @skipIfNoDynamoSupport
@@ -5437,7 +5361,7 @@ def forward(self, l_inp_, l_tmp_):
             return scan(get_scan_combine_fn("add", False), init, xs, dim=1)
 
         example_inputs = torch.ones(5, 7, 4)
-        example_init = torch.ones(5, 1, 4)
+        example_init = torch.ones(5, 4)
         functional_f = torch.func.functionalize(f)
         self.assertEqual(
             functional_f(example_init, example_inputs), f(example_init, example_inputs)
@@ -5454,7 +5378,7 @@ def forward(self, l_inp_, l_tmp_):
             return scan(add1, init, xs, dim=1)
 
         example_inputs = torch.ones(5, 7, 4)
-        example_init = torch.ones(5, 1, 4)
+        example_init = torch.ones(5, 4)
         functional_f = torch.func.functionalize(f)
         with self.assertRaisesRegex(
             UnsupportedAliasMutationException,
@@ -5469,8 +5393,6 @@ def forward(self, l_inp_, l_tmp_):
         def f(init, xs):
             return scan(add2, init, xs, dim=1)
 
-        example_inputs = torch.ones(5, 7, 4)
-        example_init = torch.ones(5, 1, 4)
         functional_f = torch.func.functionalize(f)
         with self.assertRaisesRegex(
             UnsupportedAliasMutationException,
@@ -5488,7 +5410,7 @@ def forward(self, l_inp_, l_tmp_):
             return scan(add, init, xs, dim=1)
 
         example_inputs = torch.ones(5, 7, 4)
-        example_init = torch.ones(5, 1, 4)
+        example_init = torch.ones(5, 4)
         functional_f = torch.func.functionalize(f)
         with self.assertRaisesRegex(
             UnsupportedAliasMutationException, "Combine_fn might be aliasing the input!"

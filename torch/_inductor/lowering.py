@@ -18,6 +18,7 @@ import torch.ao.quantization.fx._decomposed
 import torch.fx
 import torch.utils._pytree as pytree
 from torch._higher_order_ops.associative_scan import associative_scan_op
+from torch._higher_order_ops.scan import scan_op
 from torch._higher_order_ops.triton_kernel_wrap import triton_kernel_wrapper_mutation
 from torch._prims_common import (
     canonicalize_dim,
@@ -124,6 +125,8 @@ def get_layout_constraint_tag(fn):
     for tag in tags_by_priority:
         if tag in fn.tags:
             return tag
+    if torch._library.utils.is_builtin(fn):
+        return torch._C.Tag.flexible_layout
     return getattr(torch._C.Tag, config.custom_op_default_layout_constraint)
 
 
@@ -1481,7 +1484,7 @@ def cat(inputs, dim=0):
         if not isinstance(x, ir.Pointwise):
             return 0
 
-        count = x.inner_fn_opcount()
+        count = x.inner_fn_opcount().num_ops
         for read in x.get_read_names():
             count += op_count(V.graph.get_buffer(read))
 
@@ -6212,6 +6215,20 @@ def while_loop(cond_fn, body_fn, carried_inputs, additional_inputs):
         V.graph.disable_cudagraphs_reason = msg
 
     result = ir.WhileLoop.create(cond_fn, body_fn, carried_inputs, additional_inputs)
+    return list(map(TensorBox.create, result))
+
+
+@register_lowering(scan_op)
+def scan(combine_fn, init, inputs, dim, reverse, additional_inputs):
+    if any(map(is_triton, [init, inputs, *additional_inputs])):
+        msg = "control flow operator: torch.scan."
+        if stack_trace := V.graph.current_node.meta.get("stack_trace", None):
+            msg = f"{msg} Found from : \n {stack_trace}"
+        V.graph.disable_cudagraphs_reason = msg
+
+    result = ir.SequentialScan.create(
+        combine_fn, init, inputs, dim, reverse, additional_inputs
+    )
     return list(map(TensorBox.create, result))
 
 
