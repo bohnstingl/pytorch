@@ -1336,15 +1336,9 @@ def forward(self, pred_1, x_1):
     # TODO: provide an implementation for all compile modes and re-enable all test
     @requires_cuda
     @parametrize("reverse", [False, True])
-    # @parametrize("reverse", [False])
-    # @parametrize("reverse", [True])
     @parametrize("compile_mode", ["none", "eager"])
-    # @parametrize("compile_mode", ["none"])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
-    # @parametrize("device", [torch.device("cpu")])
     @parametrize("autograd", [False, True])
-    # @parametrize("autograd", [False])
-    # @parametrize("autograd", [True])
     def test_scan_compile2(self, reverse, compile_mode, device, autograd):
         def add2(x: torch.Tensor, y: torch.Tensor):
             return x * y, x + y
@@ -1377,7 +1371,6 @@ def forward(self, pred_1, x_1):
                 result_exp_flatten, _ = pytree.tree_flatten(result_exp)
                 grad_out = [torch.ones_like(el) for el in result_exp_flatten]
                 expected_grads = torch.autograd.grad(result_exp_flatten, (init, x), grad_out)
-                print([(e, e.shape) for e in expected_grads])
                 grads = torch.autograd.grad(result_flatten, (init, x), grad_out)
                 self.assertEqual(grads, expected_grads)
 

@@ -445,23 +445,6 @@ class ScanAutogradOp(torch.autograd.Function):
             
             ctx.save_for_backward(*(init + xs + tuple(carries) + tuple(additional_inputs)))
             
-            if reverse:
-                carries_augmented = [torch.cat([torch.unsqueeze(i, dim), c[1:]], dim=dim) for i, c in zip(init, carries)]
-                xs = [torch.flip(x, [dim]) for x in xs]
-            else:
-                carries_augmented = [torch.cat([torch.unsqueeze(i, dim), c[:-1]], dim=dim) for i, c in zip(init, carries)]
-                
-            init_bwd = [torch.ones_like(i) for i in init]
-            xs_bwd = (*[torch.ones_like(y) for y in outs], 
-                         *carries_augmented, 
-                         *xs)
-            g_init, g_outs = _extract_carry_and_out(scan_op(joint_graph, init_bwd, xs_bwd, dim, True, additional_inputs), num_leaves_init)
-            
-            if reverse:
-                g_outs = [torch.flip(g, [dim]) for g in g_outs]
-            
-            # print([(e, e.shape) for e in (*g_init, *g_outs)])
-            
             return (*carry, *outs)
 
     @staticmethod
@@ -512,21 +495,7 @@ class ScanAutogradOp(torch.autograd.Function):
                             . second output of g(y_{T-3}, x_{T-2})
 
             A conceptually similar pattern can be observerd for dy_{T-1} / dx
-            dy_{T-1}/dx_T = 0
-
-            dy_{T-1}/dx_{T-1} = df(y_{T-2}, x_{T-1})/dx_{T-1} -> second output of g(y_{T-2}, x_{T-1})
-
-            dy_{T-1}/dx_{T-2} = df(y_{T-2}, x_{T-1})/dy_{T-2} . df(y_{T-3}, x_{T-2})/dx_{T-2}
-                              -> first output of g(y_{T-2}, x_{T-1})
-                              . second output of g(y_{T-3}, x_{T-2})
-
-            If one inspects the pattern carefully, it becomes aparant that there is a product of
-            'first outputs', followed by the last term which is a 'second output'.
-            This can be represented with a matrix-vector multiplication, where the rows of the matrix contain
-            the products of the 'first ouputs' and the vector contains the 'second outputs'.
-            Furthermore, the product of 'first outputs' is continuously expanded leftwards with
-            additional time steps. Therefore, the products can also be computed utilizing cumprod.
-            The final gradients can be computed using an elementwise matrix-vector multiplication.
+            
         """
 
         joint_graph = ctx._joint_graph
@@ -546,26 +515,6 @@ class ScanAutogradOp(torch.autograd.Function):
             g_carry = flat_grads[:num_leaves_init]
             g_ys = flat_grads[num_leaves_init:]
             
-            # g_ys_rearranged = [torch.cat([torch.unsqueeze(g, 0) for g in torch.tensor_split(g_y, num_elems, dim=dim)], dim=0) for g_y in g_ys]
-            # carries_rearranged = [torch.cat([torch.unsqueeze(i, 0), c[:-1]], dim=0) for i, c in zip(init, carries)]
-            
-            # if reverse:
-            #     input_rearranged = [torch.flip(torch.cat([torch.unsqueeze(i, 0) for i in torch.tensor_split(inp, num_elems, dim=dim)], dim=0), [0]) for inp in input]
-            # else:
-            #     input_rearranged = [torch.cat([torch.unsqueeze(i, 0) for i in torch.tensor_split(inp, num_elems, dim=dim)], dim=0) for inp in input]
-            
-            # input_bwd = (*g_ys_rearranged, 
-            #              *carries_rearranged, 
-            #              *input_rearranged)
-            # g_init, g_outs = scan_op(joint_graph, init=g_carry, input=input_bwd, dim=0, reverse=True)
-            
-            # if reverse:
-            #     g_outs = [torch.flip(g, [0]) for g in g_outs]
-            
-            # g_init = [g[-1, :] for g in g_init]
-            # g_outs = [torch.cat([torch.squeeze(go, (0, 1)) for go in torch.tensor_split(go, ctx._num_elems, dim=0)], dim=dim) for go in g_outs]
-            
-            # # print([(e, e.shape) for e in (*g_init, *g_outs)])
             if reverse:
                 carries_augmented = [torch.cat([torch.unsqueeze(i, dim), c[1:]], dim=dim) for i, c in zip(init, carries)]
                 xs = [torch.flip(x, [dim]) for x in xs]
@@ -579,8 +528,6 @@ class ScanAutogradOp(torch.autograd.Function):
             
             if reverse:
                 g_outs = [torch.flip(g, [dim]) for g in g_outs]
-            
-            # print([(e, e.shape) for e in (*g_init, *g_outs)])
 
         return None, None, None, None, None, None, *g_init, *g_outs
 
