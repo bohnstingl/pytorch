@@ -269,6 +269,8 @@ def scan(
         raise RuntimeError("All init leaves must be a Tensor")
     if any(not isinstance(x, torch.Tensor) for x in leaves_xs):
         raise RuntimeError("All xs leaves must be a Tensor")
+    if any(x.ndim < dim for x in leaves_xs):
+        raise RuntimeError("All xs leaves must at least have 'dim' number of dimensions")
     if any(x.shape[dim] == 0 for x in leaves_xs):
         raise RuntimeError("All xs leaves must have a scan dimension > 0")
 
