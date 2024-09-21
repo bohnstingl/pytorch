@@ -60,10 +60,7 @@ def stack_y(y: torch.Tensor, scan_length: int) -> torch.Tensor:
 def shift_source_dim_to_target_dim(t, from_dim: int, to_dim: int):
     assert to_dim >= 0 and to_dim < t.ndim
     assert from_dim >= 0 and from_dim < t.ndim
-    dims = list(range(0, t.ndim))
-    dims.pop(from_dim)
-    dims.insert(to_dim, from_dim)
-    return t.permute(*dims)
+    return torch.movedim(t, from_dim, to_dim)
 
 
 # Internal functions for scan.py
@@ -270,7 +267,9 @@ def scan(
     if any(not isinstance(x, torch.Tensor) for x in leaves_xs):
         raise RuntimeError("All xs leaves must be a Tensor")
     if any(x.ndim < dim for x in leaves_xs):
-        raise RuntimeError("All xs leaves must at least have 'dim' number of dimensions")
+        raise RuntimeError(
+            "All xs leaves must at least have 'dim' number of dimensions"
+        )
     if any(x.shape[dim] == 0 for x in leaves_xs):
         raise RuntimeError("All xs leaves must have a scan dimension > 0")
 
@@ -278,6 +277,12 @@ def scan(
         shape = leaves_xs[0].shape
         ndim = len(shape)
         dim = utils.canonicalize_dim(ndim, dim)
+
+        # Move scan dim to 0 and always perform scan on dim 0
+        leaves_xs = [
+            shift_source_dim_to_target_dim(elem, int(dim), 0) for elem in leaves_xs
+        ]
+        dim = 0
 
         out = combine_fn(
             pytree.tree_unflatten(leaves_init, spec_init),
