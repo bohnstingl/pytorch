@@ -2920,12 +2920,8 @@ def forward(self, pred_1, x_1):
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
     @parametrize("reverse", [False, True])
-    # @parametrize("reverse", [False])
     @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
-    # @parametrize("compile_mode", ["none"])
-    # @parametrize("compile_mode", ["compile"])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
-    # @parametrize("device", [torch.device("cpu")])
     def test_scan_closure_RNN_partial_autograd(self, reverse, compile_mode, device):
         import random
 
@@ -2982,16 +2978,18 @@ def forward(self, pred_1, x_1):
             def RNN(x: torch.Tensor, y: torch.Tensor):
                 c_new_0 = x[0] + 1
                 c_new_1 = x[1] + 1
-                h_new = torch.tanh(c_new_1 + x[0] @ W_hh + b_hh) + y[0] @ W_ih + y[1] @ W_ih + b_ih + x[1]
+                h_new = (
+                    torch.tanh(c_new_1 + x[0] @ W_hh + b_hh)
+                    + y[0] @ W_ih
+                    + y[1] @ W_ih
+                    + b_ih
+                    + x[1]
+                )
                 return (c_new_0, c_new_1), h_new
 
             inits = (h, h_1)
             result = scan_fct(RNN, inits, (x, x1), dim=dim, reverse=reverse)
-            # print([val.requires_grad for val in inits])
-            # print([val.requires_grad for val in pytree.tree_leaves(result[0])])
-            result_exp = _fake_scan(
-                RNN, (h, h_1), (x, x1), dim=dim, reverse=reverse
-            )
+            result_exp = _fake_scan(RNN, (h, h_1), (x, x1), dim=dim, reverse=reverse)
             self.assertEqual(result, result_exp)
 
             if autograd:
@@ -3033,7 +3031,7 @@ def forward(self, pred_1, x_1):
             "The init and carries need to have the same require_grad structure!.*",
         ):
             result = scan_fct(fct_c1_no_grad, (h1, h2), x, dim=dim, reverse=reverse)
-            
+
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
     @parametrize("reverse", [False, True])
@@ -3063,12 +3061,12 @@ def forward(self, pred_1, x_1):
         if autograd:
             # TODO: Ideally we should be able to select the results that require gradients like this
             # [leaf for leaf in pytree.tree_leaves(result) if leaf.requires_grad == True]
-            # However, for the scan operator this does not work, as all outputs always have 
+            # However, for the scan operator this does not work, as all outputs always have
             # grad_fn=<ScanAutogradOpBackward>
             res_req_grad_flat = pytree.tree_leaves(result)[1:]
             res_exp_req_grad_flat = pytree.tree_leaves(result_exp)[1:]
             self.check_autograd(res_req_grad_flat, res_exp_req_grad_flat, (x, h2))
-            
+
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
     @parametrize("reverse", [False, True])
@@ -3098,17 +3096,12 @@ def forward(self, pred_1, x_1):
         if autograd:
             self.check_autograd(result[0], result_exp[0], (x, h1, h2))
 
-        
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
     @parametrize("reverse", [False, True])
-    # @parametrize("reverse", [False])
     @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
-    # @parametrize("compile_mode", ["none"])
-    # @parametrize("compile_mode", ["compile"])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     @parametrize("autograd", [False, True])
-    # @parametrize("autograd", [True])
     def test_scan_closure_combine_fn_with_no_grad_additional_inputs(
         self, reverse, compile_mode, device, autograd
     ):
@@ -3123,14 +3116,12 @@ def forward(self, pred_1, x_1):
 
         def fct_no_grad_bhh_Whh(x: torch.Tensor, y: torch.Tensor):
             c_new = y @ W_ih + b_ih + x
-            
+
             h_new = c_new + 1
             with torch.no_grad():
                 h_new_no_grad = torch.tanh(x @ W_hh + b_hh)
             h_new2 = h_new + h_new_no_grad
-            
-            # h_new2 = torch.tanh(x @ W_hh + b_hh)
-            
+
             return c_new, h_new2
 
         result = scan_fct(fct_no_grad_bhh_Whh, h, x, dim=dim, reverse=reverse)
@@ -3141,7 +3132,7 @@ def forward(self, pred_1, x_1):
             self.check_autograd(result[1], result_exp[1], (h, x, W_ih, b_ih))
 
         def fct_no_grad_bih_Wih_bhh_Whh(x: torch.Tensor, y: torch.Tensor):
-            c_new = x + y# + x @ W_hh
+            c_new = x + y
             h_new = c_new + 1
             with torch.no_grad():
                 c_new_no_grad = y @ W_ih + b_ih
@@ -3151,7 +3142,9 @@ def forward(self, pred_1, x_1):
             return c_new2, h_new2
 
         result = scan_fct(fct_no_grad_bih_Wih_bhh_Whh, h, x, dim=dim, reverse=reverse)
-        result_exp = _fake_scan(fct_no_grad_bih_Wih_bhh_Whh, h, x, dim=dim, reverse=reverse)
+        result_exp = _fake_scan(
+            fct_no_grad_bih_Wih_bhh_Whh, h, x, dim=dim, reverse=reverse
+        )
         self.assertEqual(result, result_exp)
 
         if autograd:
