@@ -2894,6 +2894,33 @@ def forward(self, pred_1, x_1):
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
     @parametrize("reverse", [False, True])
+    @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
+    @parametrize("autograd", [False, True])
+    def test_scan_closure_RNN_parameters_as_inputs(self, reverse, device, autograd):
+        x = torch.randn(3, 5, 10, device=device, requires_grad=autograd)
+        h = torch.randn(3, 7, device=device, requires_grad=autograd)
+        W_ih = torch.randn(5, 7, device=device, requires_grad=autograd)
+        b_ih = torch.randn(7, device=device, requires_grad=autograd)
+        W_hh = torch.randn(7, 7, device=device, requires_grad=autograd)
+        b_hh = torch.randn(7, device=device, requires_grad=autograd)
+
+        def RNN(x: torch.Tensor, y: torch.Tensor):
+            c_new = y[0] @ W_ih[1] + b_ih[2]
+            h_new = torch.tanh(c_new + x @ W_hh[3] + b_hh[4])
+            return c_new, h_new
+
+        with self.assertRaisesRegex(
+            # Should be
+            # RuntimeError,
+            # "All xs leaves must at least have.*",
+            torch._dynamo.exc.Unsupported,
+            "Observed exception.*",
+        ):
+            result = scan(RNN, h, [x, W_ih, b_ih, W_hh, b_hh], dim=2, reverse=reverse)
+
+    @unittest.skipIf(not SM70OrLater, "triton")
+    @requires_cuda
+    @parametrize("reverse", [False, True])
     @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     def test_scan_closure_RNN_partial_autograd(self, reverse, compile_mode, device):
@@ -3154,13 +3181,14 @@ def forward(self, pred_1, x_1):
             gm.code.strip(),
             """\
 def forward(self, fct_1, init_1, xs_1):
-    select = torch.ops.aten.select.int(xs_1, 0, 0)
-    add = torch.ops.aten.add.Tensor(init_1, select);  add = None
-    add_1 = torch.ops.aten.add.Tensor(init_1, select);  select = add_1 = None
+    permute = torch.ops.aten.permute.default(xs_1, [0, 1, 2]);  xs_1 = None
+    select_copy = torch.ops.aten.select_copy.int(permute, 0, 0)
+    add = torch.ops.aten.add.Tensor(init_1, select_copy);  add = None
+    add_1 = torch.ops.aten.add.Tensor(init_1, select_copy);  select_copy = add_1 = None
     clone = torch.ops.aten.clone.default(init_1);  clone = None
-    select_copy = torch.ops.aten.select_copy.int(xs_1, 0, 0);  select_copy = None
+    select_copy_1 = torch.ops.aten.select_copy.int(permute, 0, 0);  select_copy_1 = None
     scan_combine_graph_0 = self.scan_combine_graph_0
-    scan = torch.ops.higher_order.scan(scan_combine_graph_0, [init_1], [xs_1], 0, True, []);  scan_combine_graph_0 = init_1 = xs_1 = None
+    scan = torch.ops.higher_order.scan(scan_combine_graph_0, [init_1], [permute], True, []);  scan_combine_graph_0 = init_1 = permute = None
     getitem = scan[0]
     getitem_1 = scan[1];  scan = None
     return (getitem, getitem_1)""",  # noqa: B950
@@ -3177,13 +3205,14 @@ def forward(self, fct_1, init_1, xs_1):
 def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
     l_init_ = L_init_
     l_xs_ = L_xs_
-    select = l_xs_.select(0, 0)
-    out_l = l_init_ + select;  out_l = None
-    add_1 = l_init_ + select;  select = add_1 = None
+    elem = torch.movedim(l_xs_, 0, 0);  l_xs_ = None
+    select_copy = torch.select_copy(elem, 0, 0)
+    out_l = l_init_ + select_copy;  out_l = None
+    add_1 = l_init_ + select_copy;  select_copy = add_1 = None
     child = l_init_.clone();  child = None
-    child_1 = torch.select_copy(l_xs_, 0, 0);  child_1 = None
+    child_1 = torch.select_copy(elem, 0, 0);  child_1 = None
     scan_combine_fn_0 = self.scan_combine_fn_0
-    scan = torch.ops.higher_order.scan(scan_combine_fn_0, [l_init_], [l_xs_], 0, True, []);  scan_combine_fn_0 = l_init_ = l_xs_ = None
+    scan = torch.ops.higher_order.scan(scan_combine_fn_0, [l_init_], [elem], True, []);  scan_combine_fn_0 = l_init_ = elem = None
     getitem = scan[0]
     getitem_1 = scan[1];  scan = None
     return (getitem, getitem_1)""",  # noqa: B950

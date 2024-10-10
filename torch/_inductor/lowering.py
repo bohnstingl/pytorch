@@ -6225,7 +6225,7 @@ def while_loop(cond_fn, body_fn, carried_inputs, additional_inputs):
 
 
 @register_lowering(scan_op)
-def scan(combine_subgraph, init, inputs, dim, reverse, additional_inputs):
+def scan(combine_subgraph, init, inputs, reverse, additional_inputs, dim=0):
     from torch._higher_order_ops.scan import _extract_carry_and_out, stack_y
 
     num_init_leaves = len(init)
@@ -6235,8 +6235,8 @@ def scan(combine_subgraph, init, inputs, dim, reverse, additional_inputs):
             msg = f"{msg} Found from : \n {stack_trace}"
         V.graph.disable_cudagraphs_reason = msg
 
-    def extract_scan_args(combine_subraph, init, xs, dim, reverse, additional_inputs):
-        return combine_subraph, init, xs, dim, reverse, additional_inputs
+    def extract_scan_args(combine_subraph, init, xs, reverse, additional_inputs):
+        return combine_subraph, init, xs, reverse, additional_inputs
 
     def _to_out_variant_graph(
         gm: torch.fx.GraphModule,
@@ -6268,7 +6268,7 @@ def scan(combine_subgraph, init, inputs, dim, reverse, additional_inputs):
         return gm
 
     if combine_subgraph.graph is None:
-        _, fx_init, fx_xs, _, _, fx_additional_inputs = extract_scan_args(
+        _, fx_init, fx_xs, _, fx_additional_inputs = extract_scan_args(
             *V.graph.current_node.args
         )
 
@@ -6306,7 +6306,7 @@ def scan(combine_subgraph, init, inputs, dim, reverse, additional_inputs):
             combine_subgraph.graph.run(*example_inputs)  # type: ignore[arg-type]
 
     result = ir.SequentialScan.create(
-        combine_subgraph, init, inputs, dim, reverse, additional_inputs
+        combine_subgraph, init, inputs, reverse, additional_inputs
     )
     return list(map(TensorBox.create, result))
 
