@@ -77,7 +77,7 @@ def wrap_combine_fn_flat(
     return [*carry_flat, *combined_flat]
 
 
-def create_fw_bw_graph_combinefn(combine_fn, init, xs, dim, additional_inputs):
+def create_fw_bw_graph_combinefn(combine_fn, init, xs, additional_inputs):
     # See Note [HOP create fw_bw graph] in create_fw_bw_graph in utils.py
 
     # Helper wrapper for the autograd forward.
@@ -92,7 +92,7 @@ def create_fw_bw_graph_combinefn(combine_fn, init, xs, dim, additional_inputs):
             num_additional_inputs = len(additional_inputs)
 
             fw_init = [pytree.tree_map(_from_fun, x) for x in init]
-            fw_xs = [pytree.tree_map(_from_fun, x).select(dim, 0) for x in xs]
+            fw_xs = [first_slice_copy(pytree.tree_map(_from_fun, x), 0) for x in xs]
             fw_additional_inputs = [
                 pytree.tree_map(_from_fun, a) for a in additional_inputs
             ]
@@ -282,11 +282,12 @@ def scan(
         leaves_xs = [
             shift_source_dim_to_target_dim(elem, int(dim), 0) for elem in leaves_xs
         ]
-        dim = 0
 
         out = combine_fn(
             pytree.tree_unflatten(leaves_init, spec_init),
-            pytree.tree_unflatten([elem.select(dim, 0) for elem in leaves_xs], spec_xs),
+            pytree.tree_unflatten(
+                [first_slice_copy(elem, 0) for elem in leaves_xs], spec_xs
+            ),
         )
 
         # The first output needs to have the same pytree as init
@@ -316,9 +317,7 @@ def scan(
         )
 
         result_carry, result_flat = _extract_carry_and_out(
-            scan_op(
-                combine_fn, leaves_init, leaves_xs, dim, reverse, additional_inputs=[]
-            ),
+            scan_op(combine_fn, leaves_init, leaves_xs, reverse, additional_inputs=[]),
             len(leaves_init),
         )
 
@@ -334,14 +333,14 @@ class ScanOp(HigherOrderOperator):
     def __init__(self):
         super().__init__("scan")
 
-    def __call__(self, combine_fn, init, xs, dim, reverse, additional_inputs):
-        return super().__call__(combine_fn, init, xs, dim, reverse, additional_inputs)
+    def __call__(self, combine_fn, init, xs, reverse, additional_inputs):
+        return super().__call__(combine_fn, init, xs, reverse, additional_inputs)
 
 
 scan_op = ScanOp()
 
 
-def generic_scan(operator, init, xs, dim=0, reverse=False, additional_inputs=None):
+def generic_scan(operator, init, xs, reverse=False, additional_inputs=None, dim=0):
     additional_inputs = additional_inputs if additional_inputs is not None else []
 
     def _scan(init, xs):
@@ -421,13 +420,12 @@ def trace_scan(
     combine_fn: Callable,
     init: List[torch.Tensor],
     xs: List[torch.Tensor],
-    dim: int,
     reverse: bool,
     additional_inputs: List[torch.Tensor],
 ):
     with disable_proxy_modes_tracing():
         sample_inits = [x_init.clone() for x_init in init]
-        sample_inputs = [first_slice_copy(x, dim) for x in xs]
+        sample_inputs = [first_slice_copy(x, 0) for x in xs]
         sample_additional_inputs = [x.clone() for x in additional_inputs]
         combine_graph = reenter_make_fx(combine_fn)(
             *sample_inits, *sample_inputs, *sample_additional_inputs
@@ -462,14 +460,15 @@ def trace_scan(
 
     proxy_mode.tracer.root.register_module(combine_graph_name, combine_graph)
 
-    args = (combine_graph, init, xs, dim, reverse, additional_inputs)
+    args = (combine_graph, init, xs, reverse, additional_inputs)
     proxy_args = pytree.tree_map(proxy_mode.tracer.unwrap_proxy, args)
     out_proxy = proxy_mode.tracer.create_proxy(
         "call_function", func_overload, proxy_args, {}, name="scan"
     )
 
     with disable_proxy_modes_tracing():
-        scan_length = xs[0].shape[dim]
+        # The scan dim is always 0, thus the scan length is also determined from dim 0
+        scan_length = xs[0].shape[0]
         fake_carry, fake_outputs = _extract_carry_and_out(
             [o.meta["val"] for o in outputs], len(init)
         )
@@ -482,10 +481,10 @@ def trace_scan(
 
 
 @scan_op.py_impl(DispatchKey.CompositeExplicitAutograd)
-def scan_op_dense(combine_fn, init, xs, dim, reverse, additional_inputs):
+def scan_op_dense(combine_fn, init, xs, reverse, additional_inputs):
     mode = _get_current_dispatch_mode()
     assert mode is None, "Mode should never be enabled for CPU/CUDA key"
-    return generic_scan(combine_fn, init, xs, dim, reverse, additional_inputs)
+    return generic_scan(combine_fn, init, xs, reverse, additional_inputs)
 
 
 class ScanAutogradOp(torch.autograd.Function):
@@ -501,14 +500,12 @@ class ScanAutogradOp(torch.autograd.Function):
         ctx,
         fw_graph,
         joint_graph,
-        dim,
         reverse,
         num_leaves_init,
         num_leaves_xs,
         *flat_args,
     ):
         ctx._joint_graph = joint_graph
-        ctx._dim = dim
         ctx._reverse = reverse
         ctx._num_leaves_init = num_leaves_init
         ctx._num_leaves_xs = num_leaves_xs
@@ -519,7 +516,7 @@ class ScanAutogradOp(torch.autograd.Function):
 
         with torch._C._AutoDispatchBelowAutograd():
             carry, carries_outs = _extract_carry_and_out(
-                scan_op(fw_graph, init, xs, dim, reverse, additional_inputs),
+                scan_op(fw_graph, init, xs, reverse, additional_inputs),
                 num_leaves_init,
             )
 
@@ -569,33 +566,30 @@ class ScanAutogradOp(torch.autograd.Function):
 
         """
 
-        def prepare_xs_carries_for_bwd(xs, init, carries, dim, reverse):
+        def prepare_xs_carries_for_bwd(xs, init, carries, reverse):
             if reverse:
-                return [torch.flip(x, [dim]) for x in xs], [
-                    torch.cat(
-                        [torch.unsqueeze(i, dim), torch.flip(c[1:], [dim])], dim=dim
-                    )
+                return [torch.flip(x, [0]) for x in xs], [
+                    torch.cat([torch.unsqueeze(i, 0), torch.flip(c[1:], [0])], dim=0)
                     for i, c in zip(init, carries)
                 ]
             else:
                 return xs, [
-                    torch.cat([torch.unsqueeze(i, dim), c[:-1]], dim=dim)
+                    torch.cat([torch.unsqueeze(i, 0), c[:-1]], dim=0)
                     for i, c in zip(init, carries)
                 ]
 
-        def prepare_final_gradients_xs(g_xs, dim, reverse):
+        def prepare_final_gradients_xs(g_xs, reverse):
             # The g_xs coming from the backward scan has the outputs always stacked at dim 0
             # Thus, first we shift the 0-th dim to the dim of the forward scan
-            g_xs = [shift_source_dim_to_target_dim(g, 0, dim) for g in g_xs]
 
             # Second, if needed, we flip the g_xs along dim
             if reverse:
-                g_xs = [torch.flip(g, [dim]) for g in g_xs]
+                g_xs = [torch.flip(g, [0]) for g in g_xs]
 
             return g_xs
 
         def prepare_initial_gradients(
-            flat_grads, additional_inputs, num_leaves_init, num_leaves_ys, dim
+            flat_grads, additional_inputs, num_leaves_init, num_leaves_ys
         ):
             # The flat gradients are a list of g_c_T, g_ys
             g_c_T, g_ys, _ = ScanAutogradOp.extract_init_xs_additional_inputs(
@@ -604,14 +598,13 @@ class ScanAutogradOp(torch.autograd.Function):
 
             # In case the reverse flag is used, the upstream g_ys need to be flipped along dim
             if reverse:
-                g_ys = [torch.flip(g, [dim]) for g in g_ys]
+                g_ys = [torch.flip(g, [0]) for g in g_ys]
 
             # The initial gradients for the additional_inputs are all zeros
             g_additional_inputs = [torch.zeros_like(ai) for ai in additional_inputs]
             return g_c_T, g_ys, g_additional_inputs
 
         joint_graph = ctx._joint_graph
-        dim = ctx._dim
         reverse = ctx._reverse
         num_leaves_init = ctx._num_leaves_init
         num_leaves_xs = ctx._num_leaves_xs
@@ -622,7 +615,6 @@ class ScanAutogradOp(torch.autograd.Function):
         # The gradients though need to be provided with the correct scan dimension dim
         # Therefore, the inputs to the backward scan are all on dim 0, and the scan is performed on dim 0
         # The gradient outputs are finally shifted at the end to the correct dim
-        bwd_scan_dim = 0
 
         # Retrieve the forward inputs and the forward outputs
         flat_args = ctx.saved_tensors
@@ -633,10 +625,7 @@ class ScanAutogradOp(torch.autograd.Function):
 
         # The backward scan operates on the 0-th dim and thus the original inputs need to be
         # permuted accordingly
-        xs = [
-            shift_source_dim_to_target_dim(o, dim, bwd_scan_dim)
-            for o in flat_args[num_leaves_init : num_leaves_init + num_leaves_xs]
-        ]
+        xs = flat_args[num_leaves_init : num_leaves_init + num_leaves_xs]
 
         with torch._C._AutoDispatchBelowAutograd():
             # Prepare the initial gradients for the backward scan
@@ -645,22 +634,18 @@ class ScanAutogradOp(torch.autograd.Function):
                 additional_inputs,
                 num_leaves_init,
                 num_leaves_ys,
-                bwd_scan_dim,
             )
 
             # Prepare the inputs for the backward scan.
             # This involves flipping the input xs if needed as well as
             # Prepending the init of the forward scan to the carries
-            xs, carries = prepare_xs_carries_for_bwd(
-                xs, init, carries, bwd_scan_dim, reverse
-            )
+            xs, carries = prepare_xs_carries_for_bwd(xs, init, carries, reverse)
             xs_bwd = [*g_ys, *carries, *xs]
 
             g_outs = scan_op(
                 joint_graph,
                 [*g_additional_inputs, *g_c_T],
                 xs_bwd,
-                bwd_scan_dim,
                 True,
                 additional_inputs,
             )
@@ -670,13 +655,13 @@ class ScanAutogradOp(torch.autograd.Function):
                 + num_leaves_init
             ]
             g_xs = g_outs[-num_leaves_xs:]
-            g_xs = prepare_final_gradients_xs(g_xs, dim, reverse)
+            g_xs = prepare_final_gradients_xs(g_xs, reverse)
 
-        return *[None] * 6, *g_init, *g_xs, *new_g_additional_inputs
+        return *[None] * 5, *g_init, *g_xs, *new_g_additional_inputs
 
 
 @scan_op.py_impl(DispatchKey.Autograd)
-def scan_autograd(combine_fn, init, xs, dim, reverse, additional_inputs):
+def scan_autograd(combine_fn, init, xs, reverse, additional_inputs):
     # A shortcut for the case where all inputs don't require gradient,
     # we skip tracing the forward and backward graph.
     # TODO: Figure out how to do this in dispatcher so that we don't have to do this check here
@@ -686,7 +671,7 @@ def scan_autograd(combine_fn, init, xs, dim, reverse, additional_inputs):
         (init, xs, additional_inputs),
     ):
         with torch._C._AutoDispatchBelowAutograd():
-            return scan_op(combine_fn, init, xs, dim, reverse, additional_inputs)
+            return scan_op(combine_fn, init, xs, reverse, additional_inputs)
 
     # TODO: Support this in the future
     if pytree.tree_any(
@@ -706,9 +691,8 @@ def scan_autograd(combine_fn, init, xs, dim, reverse, additional_inputs):
         # Currently scan does not support this and thus we just dummy call another scan
         # The scan dim in the backward backward is always zero, because the
         # scan outputs during the forward are always collected at dim=0
-        bwd_dim = 0
         with torch._C._AutoDispatchBelowAutograd():
-            return scan_op(combine_fn, init, xs, bwd_dim, reverse, additional_inputs)
+            return scan_op(combine_fn, init, xs, reverse, additional_inputs)
 
     num_leaves_init = len(init)
     num_leaves_xs = len(xs)
@@ -716,12 +700,11 @@ def scan_autograd(combine_fn, init, xs, dim, reverse, additional_inputs):
     (
         fw_graph,
         joint_graph,
-    ) = create_fw_bw_graph_combinefn(combine_fn, init, xs, dim, additional_inputs)
+    ) = create_fw_bw_graph_combinefn(combine_fn, init, xs, additional_inputs)
 
     flat_out = ScanAutogradOp.apply(
         fw_graph,
         joint_graph,
-        dim,
         reverse,
         num_leaves_init,
         num_leaves_xs,
@@ -731,20 +714,18 @@ def scan_autograd(combine_fn, init, xs, dim, reverse, additional_inputs):
 
 
 @scan_op.py_impl(ProxyTorchDispatchMode)
-def scan_proxy_mode(mode, combine_fn, init, xs, dim, reverse, additional_inputs):
-    return trace_scan(
-        mode, scan_op, combine_fn, init, xs, dim, reverse, additional_inputs
-    )
+def scan_proxy_mode(mode, combine_fn, init, xs, reverse, additional_inputs):
+    return trace_scan(mode, scan_op, combine_fn, init, xs, reverse, additional_inputs)
 
 
 @scan_op.py_impl(FakeTensorMode)
-def scan_fake_tensor_mode(mode, combine_fn, init, xs, dim, reverse, additional_inputs):
+def scan_fake_tensor_mode(mode, combine_fn, init, xs, reverse, additional_inputs):
     with mode:
-        scan_length = xs[0].shape[dim]
+        scan_length = xs[0].shape[0]
         carry, outputs = _extract_carry_and_out(
             combine_fn(
                 *init,
-                *[first_slice_copy(inp, dim) for inp in xs],
+                *[first_slice_copy(inp, 0) for inp in xs],
                 *additional_inputs,
             ),
             len(init),
@@ -757,16 +738,14 @@ def scan_fake_tensor_mode(mode, combine_fn, init, xs, dim, reverse, additional_i
 
 
 @scan_op.py_functionalize_impl
-def scan_functionalize(ctx, combine_fn, init, xs, dim, reverse, additional_inputs):
+def scan_functionalize(ctx, combine_fn, init, xs, reverse, additional_inputs):
     unwrapped_xs = ctx.unwrap_tensors(xs)
     unwrapped_init = ctx.unwrap_tensors(init)
     unwrapped_additional_inputs = ctx.unwrap_tensors(additional_inputs)
     with ctx.redispatch_to_next() as m:
         functional_combine_fn = ctx.functionalize(combine_fn)
         pre_dispatch = hasattr(ctx, "mode") and ctx.mode.pre_dispatch
-        sample_unwrapped_xs_sliced = [
-            first_slice_copy(inp, dim) for inp in unwrapped_xs
-        ]
+        sample_unwrapped_xs_sliced = [first_slice_copy(inp, 0) for inp in unwrapped_xs]
         sample_inputs = list(
             itertools.chain(
                 unwrapped_init,
@@ -790,7 +769,6 @@ def scan_functionalize(ctx, combine_fn, init, xs, dim, reverse, additional_input
             functional_combine_fn,
             unwrapped_init,
             unwrapped_xs,
-            dim,
             reverse,
             unwrapped_additional_inputs,
         )

@@ -6698,7 +6698,6 @@ class SequentialScan(ExternKernel):
         combine_subgraph: Subgraph,
         init: List[TensorBox],
         xs: List[TensorBox],
-        dim: int,
         reverse: bool,
         additional_inputs: List[TensorBox],
         layout: MultiOutputLayout,
@@ -6706,7 +6705,6 @@ class SequentialScan(ExternKernel):
         self.combine_subgraph = combine_subgraph
         self.init = init
         self.xs = xs
-        self.dim = dim
         self.reverse = reverse
         self.additional_inputs = additional_inputs
 
@@ -6725,7 +6723,6 @@ class SequentialScan(ExternKernel):
         combine_subgraph: Subgraph,
         init: List[TensorBox],
         xs: List[TensorBox],
-        dim: int,
         reverse: bool,
         additional_inputs: List[TensorBox],
     ):
@@ -6734,7 +6731,9 @@ class SequentialScan(ExternKernel):
         num_init_leaves = len(init)
         init = [cls.realize_input(x) for x in init]
         xs = [cls.realize_input(x) for x in xs]
-        scan_length = xs[0].get_size()[dim]
+
+        # The scan dim is always 0, thus the scan length is also determined from dim 0
+        scan_length = xs[0].get_size()[0]
         additional_inputs = [cls.realize_input(x) for x in additional_inputs]
         all_inputs = init + xs + additional_inputs
 
@@ -6750,7 +6749,7 @@ class SequentialScan(ExternKernel):
         # make sure init and outputs are structurally equivalent
         assert len(carry) == num_init_leaves, (init, carry)
         for i, (ini, c) in enumerate(zip(init, carry)):
-            assert ini.get_size() == c.get_size(), (i, ini, c, dim)
+            assert ini.get_size() == c.get_size(), (i, ini, c)
             # assume all init and outputs are on the same device
             # as the MultiOutputLayout below requires single device
             assert ini.get_device() == c.get_device() == device, (i, ini, c, device)
@@ -6760,7 +6759,6 @@ class SequentialScan(ExternKernel):
             combine_subgraph=combine_subgraph,
             init=init,
             xs=xs,
-            dim=dim,
             reverse=reverse,
             additional_inputs=additional_inputs,
             layout=MultiOutputLayout(device),

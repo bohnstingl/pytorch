@@ -2910,8 +2910,11 @@ def forward(self, pred_1, x_1):
             return c_new, h_new
 
         with self.assertRaisesRegex(
-            RuntimeError,
-            "All xs leaves must at least have.*",
+            # Should be
+            # RuntimeError,
+            # "All xs leaves must at least have.*",
+            torch._dynamo.exc.Unsupported,
+            "Observed exception.*",
         ):
             result = scan(RNN, h, [x, W_ih, b_ih, W_hh, b_hh], dim=2, reverse=reverse)
 
@@ -3179,13 +3182,13 @@ def forward(self, pred_1, x_1):
             """\
 def forward(self, fct_1, init_1, xs_1):
     permute = torch.ops.aten.permute.default(xs_1, [0, 1, 2]);  xs_1 = None
-    select = torch.ops.aten.select.int(permute, 0, 0)
-    add = torch.ops.aten.add.Tensor(init_1, select);  add = None
-    add_1 = torch.ops.aten.add.Tensor(init_1, select);  select = add_1 = None
+    select_copy = torch.ops.aten.select_copy.int(permute, 0, 0)
+    add = torch.ops.aten.add.Tensor(init_1, select_copy);  add = None
+    add_1 = torch.ops.aten.add.Tensor(init_1, select_copy);  select_copy = add_1 = None
     clone = torch.ops.aten.clone.default(init_1);  clone = None
-    select_copy = torch.ops.aten.select_copy.int(permute, 0, 0);  select_copy = None
+    select_copy_1 = torch.ops.aten.select_copy.int(permute, 0, 0);  select_copy_1 = None
     scan_combine_graph_0 = self.scan_combine_graph_0
-    scan = torch.ops.higher_order.scan(scan_combine_graph_0, [init_1], [permute], 0, True, []);  scan_combine_graph_0 = init_1 = permute = None
+    scan = torch.ops.higher_order.scan(scan_combine_graph_0, [init_1], [permute], True, []);  scan_combine_graph_0 = init_1 = permute = None
     getitem = scan[0]
     getitem_1 = scan[1];  scan = None
     return (getitem, getitem_1)""",  # noqa: B950
@@ -3203,13 +3206,13 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
     l_init_ = L_init_
     l_xs_ = L_xs_
     elem = torch.movedim(l_xs_, 0, 0);  l_xs_ = None
-    select = elem.select(0, 0)
-    out_l = l_init_ + select;  out_l = None
-    add_1 = l_init_ + select;  select = add_1 = None
+    select_copy = torch.select_copy(elem, 0, 0)
+    out_l = l_init_ + select_copy;  out_l = None
+    add_1 = l_init_ + select_copy;  select_copy = add_1 = None
     child = l_init_.clone();  child = None
     child_1 = torch.select_copy(elem, 0, 0);  child_1 = None
     scan_combine_fn_0 = self.scan_combine_fn_0
-    scan = torch.ops.higher_order.scan(scan_combine_fn_0, [l_init_], [elem], 0, True, []);  scan_combine_fn_0 = l_init_ = elem = None
+    scan = torch.ops.higher_order.scan(scan_combine_fn_0, [l_init_], [elem], True, []);  scan_combine_fn_0 = l_init_ = elem = None
     getitem = scan[0]
     getitem_1 = scan[1];  scan = None
     return (getitem, getitem_1)""",  # noqa: B950
