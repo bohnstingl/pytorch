@@ -13,6 +13,7 @@ from torch._dispatch.python import suspend_functionalization
 from torch._higher_order_ops.utils import (
     _has_potential_branch_input_alias,
     _has_potential_branch_input_mutation,
+    _has_potential_branch_output_alias,
     _set_compilation_env,
     reenter_make_fx,
     unique_graph_id,
@@ -877,13 +878,19 @@ def scan_functionalize(ctx, combine_fn, init, xs, dim, reverse, additional_input
             functional_combine_fn, sample_inputs, pre_dispatch=pre_dispatch
         ):
             raise UnsupportedAliasMutationException(
-                "Combine_fn might be modifying the input!"
+                "Combine_fn might be modifying the input! Please also check the gradient of combine_fn for modifying the input"
             )
         if _has_potential_branch_input_alias(
             functional_combine_fn, sample_inputs, pre_dispatch=pre_dispatch
         ):
             raise UnsupportedAliasMutationException(
-                "Combine_fn might be aliasing the input!"
+                "Combine_fn might be aliasing the input! Please also check the gradient of combine_fn for modifying the input"
+            )
+        if _has_potential_branch_output_alias(
+            functional_combine_fn, sample_inputs, pre_dispatch=pre_dispatch
+        ):
+            raise UnsupportedAliasMutationException(
+                "Combine_fn might be aliasing its outputs! Please also check the gradient of combine_fn for aliasing its outputs"
             )
         ret = scan_op(
             functional_combine_fn,
