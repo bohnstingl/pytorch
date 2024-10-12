@@ -3,8 +3,8 @@ import torch
 import torch.utils._pytree as pytree
 from torch._C import DispatchKey
 from torch._higher_order_ops.utils import (
-    _has_potential_branch_input_alias,
     _has_potential_branch_input_mutation,
+    _has_potential_branch_input_output_alias,
     autograd_not_implemented,
     reenter_make_fx,
     unique_graph_id,
@@ -103,7 +103,7 @@ def hints_wrapper_functionalize(ctx, body_fn, args, kwargs, hints):
             raise UnsupportedAliasMutationException(
                 "body_fn of hints_wrapper might be modifying the input!"
             )
-        if _has_potential_branch_input_alias(
+        if _has_potential_branch_input_output_alias(
             functional_body_fn, unwrapped_args, pre_dispatch=pre_dispatch
         ):
             raise UnsupportedAliasMutationException(

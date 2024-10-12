@@ -2284,7 +2284,7 @@ torch_non_c_binding_in_graph_functions = dict.fromkeys(
         "torch._guards.compile_context",
         "torch._guards.detect_fake_mode",
         "torch._guards.tracing",
-        "torch._higher_order_ops.map._has_potential_branch_input_alias",
+        "torch._higher_order_ops.map._has_potential_branch_input_output_alias",
         "torch._higher_order_ops.map._has_potential_branch_input_mutation",
         "torch._higher_order_ops.map._stack_pytree",
         "torch._higher_order_ops.map._unstack_pytree",

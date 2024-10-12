@@ -114,12 +114,7 @@ def _set_compilation_env():
         torch.fx._symbolic_trace._is_fx_tracing_flag = _old_is_tracing
 
 
-def _has_potential_branch_input_mutation(branch, inputs, pre_dispatch=False):
-    """
-    Dispatch-trace the branch with inputs and check if
-    producing graph has mutable op on the input. This is
-    bit restrictive as the branch must be traceable.
-    """
+def _create_gm_from_branch(branch, inputs, pre_dispatch):
     try:
         gm = make_fx(branch, pre_dispatch=pre_dispatch)(*inputs)
     except UnsupportedAliasMutationException:
@@ -128,6 +123,21 @@ def _has_potential_branch_input_mutation(branch, inputs, pre_dispatch=False):
         return True
     except Exception as e:
         raise e
+
+    return gm
+
+
+def _has_potential_branch_input_mutation(branch, inputs, pre_dispatch=False):
+    """
+    Dispatch-trace the branch with inputs and check if
+    producing graph has mutable op on the input. This is
+    bit restrictive as the branch must be traceable.
+    """
+    gm = _create_gm_from_branch(branch, inputs, pre_dispatch)
+    # this can happen when nested cond_op is
+    # functionalized
+    if isinstance(gm, bool):
+        return gm
 
     def _detect_input_mutation(gm):
         input_nodes = set()
@@ -154,20 +164,17 @@ def _has_potential_branch_input_mutation(branch, inputs, pre_dispatch=False):
     return _detect_input_mutation(gm)
 
 
-def _has_potential_branch_input_alias(branch, inputs, pre_dispatch=False):
+def _has_potential_branch_input_output_alias(branch, inputs, pre_dispatch=False):
     """
     Dispatch-trace the branch with inputs and check if
     producing graph has output aliasing the branch input. This is
     bit restrictive as the branch must be traceable.
     """
-    try:
-        gm = make_fx(branch, pre_dispatch=pre_dispatch)(*inputs)
-    except UnsupportedAliasMutationException:
-        # this can happen when nested cond_op is
-        # functionalized
-        return True
-    except Exception as e:
-        raise e
+    gm = _create_gm_from_branch(branch, inputs, pre_dispatch)
+    # this can happen when nested cond_op is
+    # functionalized
+    if isinstance(gm, bool):
+        return gm
 
     def _detect_input_alias(gm):
         input_storages = set()
@@ -178,11 +185,16 @@ def _has_potential_branch_input_alias(branch, inputs, pre_dispatch=False):
             if node.op == "placeholder" and "val" in node.meta:
                 input_storages.add(StorageWeakRef(node.meta["val"]._typed_storage()))
             if node.op == "output":
+                output_storages = set()
 
                 def check_alias(out):
                     if out is not None and "val" in out.meta:
                         out_storage = StorageWeakRef(out.meta["val"]._typed_storage())
-                        return out_storage in input_storages
+                        alias = (out_storage in input_storages) or (
+                            out_storage in output_storages
+                        )
+                        output_storages.add(out_storage)
+                        return alias
                     return False
 
                 if any(pytree.tree_leaves(pytree.tree_map(check_alias, node.args))):
@@ -213,7 +225,7 @@ def unique_graph_id(proxy_mode, prefix):
     return i, next_name
 
 
-def _from_fun(t):
+def _from_fun(t, force_requires_grad=False):
     from torch._functorch.aot_autograd import from_fun
     from torch._subclasses.functional_tensor import FunctionalTensor
 
@@ -223,7 +235,7 @@ def _from_fun(t):
                 t.size(),
                 t.stride(),
                 dtype=t.dtype,
-                requires_grad=t.requires_grad,
+                requires_grad=t.requires_grad if not force_requires_grad else True,
                 device=t.device,
             )
         else:

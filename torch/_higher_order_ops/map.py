@@ -5,8 +5,8 @@ from torch._C import DispatchKey
 from torch._dispatch.python import suspend_functionalization
 from torch._functorch.aot_autograd import AOTConfig, create_joint
 from torch._higher_order_ops.utils import (
-    _has_potential_branch_input_alias,
     _has_potential_branch_input_mutation,
+    _has_potential_branch_input_output_alias,
     _maybe_run_with_interpreter,
     reenter_make_fx,
     UnsupportedAliasMutationException,
@@ -255,7 +255,7 @@ def map_functionalize(ctx, f, xs, pos_args):
         ):
             raise UnsupportedAliasMutationException("torch.map is mutating the input!")
 
-        if _has_potential_branch_input_alias(
+        if _has_potential_branch_input_output_alias(
             f, example_inputs, pre_dispatch=pre_dispatch
         ):
             raise UnsupportedAliasMutationException("torch.map is aliasing the input!")

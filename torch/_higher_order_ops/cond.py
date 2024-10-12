@@ -16,8 +16,8 @@ from torch._dispatch.python import suspend_functionalization
 from torch._functorch.utils import exposed_in
 from torch._guards import detect_fake_mode
 from torch._higher_order_ops.utils import (
-    _has_potential_branch_input_alias,
     _has_potential_branch_input_mutation,
+    _has_potential_branch_input_output_alias,
     _maybe_run_with_interpreter,
     _set_compilation_env,
     reenter_make_fx,
@@ -469,7 +469,7 @@ def cond_func(ctx, pred, true_fn, false_fn, inputs):
                     "One of torch.cond branch might be modifying the input!"
                 )
         for branch in [true_fn, false_fn]:
-            if _has_potential_branch_input_alias(
+            if _has_potential_branch_input_output_alias(
                 branch, unwrapped_inputs, pre_dispatch=pre_dispatch
             ):
                 raise UnsupportedAliasMutationException(
