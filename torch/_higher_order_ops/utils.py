@@ -164,7 +164,7 @@ def _has_potential_branch_input_mutation(branch, inputs, pre_dispatch=False):
     return _detect_input_mutation(gm)
 
 
-def _has_potential_branch_input_alias(branch, inputs, pre_dispatch=False):
+def _has_potential_branch_input_output_alias(branch, inputs, pre_dispatch=False):
     """
     Dispatch-trace the branch with inputs and check if
     producing graph has output aliasing the branch input. This is
@@ -185,11 +185,16 @@ def _has_potential_branch_input_alias(branch, inputs, pre_dispatch=False):
             if node.op == "placeholder" and "val" in node.meta:
                 input_storages.add(StorageWeakRef(node.meta["val"]._typed_storage()))
             if node.op == "output":
+                output_storages = set()
 
                 def check_alias(out):
                     if out is not None and "val" in out.meta:
                         out_storage = StorageWeakRef(out.meta["val"]._typed_storage())
-                        return out_storage in input_storages
+                        alias = (out_storage in input_storages) or (
+                            out_storage in output_storages
+                        )
+                        output_storages.add(out_storage)
+                        return alias
                     return False
 
                 if any(pytree.tree_leaves(pytree.tree_map(check_alias, node.args))):
@@ -202,45 +207,6 @@ def _has_potential_branch_input_alias(branch, inputs, pre_dispatch=False):
         return False
 
     return _detect_input_alias(gm)
-
-
-def _has_potential_branch_output_alias(branch, inputs, pre_dispatch=False):
-    """
-    Dispatch-trace the branch with inputs and check if
-    producing graph has aliasing the branch output. This is
-    bit restrictive as the branch must be traceable.
-    """
-    gm = _create_gm_from_branch(branch, inputs, pre_dispatch)
-    # this can happen when nested cond_op is
-    # functionalized
-    if isinstance(gm, bool):
-        return gm
-
-    def _detect_output_alias(gm):
-        output_storages = set()
-        for node in gm.graph.nodes:
-            if node.op == "output":
-
-                def check_alias(out):
-                    if out is not None and "val" in out.meta:
-                        out_storage = StorageWeakRef(out.meta["val"]._typed_storage())
-                        alias = out_storage in output_storages
-                        output_storages.add(out_storage)
-                        return alias
-                    return False
-
-                if any(pytree.tree_leaves(pytree.tree_map(check_alias, node.args))):
-                    return True
-
-        for _, module in gm.named_children():
-            if isinstance(module, torch.fx.GraphModule) and _detect_output_alias(
-                module
-            ):
-                return True
-
-        return False
-
-    return _detect_output_alias(gm)
 
 
 def unique_graph_id(proxy_mode, prefix):
