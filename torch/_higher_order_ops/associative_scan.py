@@ -146,18 +146,22 @@ def create_fw_bw_graph_combinefn(combine_fn, xs, additional_inputs):
             # Thus, even if the gradients of xs or additional_inputs should be tracked,
             # The ``torch.no_grad()`` statements may break the gradient tracking
             if any(gx != gh for gx, gh in zip(get_gradient_mask(g_outs[:num_xs]), get_gradient_mask(g_outs[num_xs: 2 * num_xs]))):
+                # This exception should never be reached!
                 raise RuntimeError('The combine_fn may contain operations that break the gradient flow!')
             xs_mask = xs_mask and get_gradient_mask(
                 g_outs[:num_xs]
             )
             additional_inputs_mask = additional_inputs_mask and get_gradient_mask(
-                g_outs[len(g_outs) - num_additional_inputs :]
+                g_outs[len(g_outs) - num_additional_inputs:]
             ) 
 
             def wrapper(*args):
                 grads = joint_graph(*args)
-                grads = mask_gradient(grads, xs_mask * 2)
-                return (*grads,)
+                grads_h_x = grads[:num_xs * 2]
+                grads_h_x = mask_gradient(grads_h_x, xs_mask * 2)
+                grads_additional_input = grads[num_xs * 2:]
+                grads_additional_input = mask_gradient(grads_additional_input, additional_inputs_mask)
+                return (*grads_h_x, *grads_additional_input)
 
             joint_graph = _maybe_reenter_make_fx(wrapper)(
                 *fw_outputs, *fw_xs_1, *fw_xs_2, *fw_additional_inputs
@@ -231,6 +235,7 @@ def associative_scan(
 
     if not torch._dynamo.is_compiling():
         with _set_compilation_env(), torch._dynamo.utils.disable_cache_limit():
+            # return torch.compile(associative_scan, fullgraph=True, backend='eager')(
             return torch.compile(associative_scan, fullgraph=True)(
                 combine_fn, xs, dim=dim, reverse=reverse, combine_mode=combine_mode
             )
@@ -525,6 +530,9 @@ class ScanAutogradOp(torch.autograd.Function):
                     else:
                         g_list.append(None)
                 return g_list
+            
+            def reverse_vmap_stack(res_stacked):
+                return [torch.squeeze(el, 0) for el in torch.split(res_stacked, 1, 0)]
 
             """Step 1"""
             shifted_outs = [
@@ -626,7 +634,7 @@ class ScanAutogradOp(torch.autograd.Function):
             eye = expand_to_equal_dims(eye, len_shape + 1)
             a_eye = triu + tril2
 
-            def compute_gradient_for_leaf(grads_h_parts, grads_x_parts, flat_grads):
+            def compute_gradient_mat_for_leaf(grads_h_parts, flat_grads):
                 # The first output of the associative_scan operation is always the first element of xs.
                 # Therefore, the first grads_h is always zero and the first grads_x is always 1
                 grads_h_parts = torch.concat(
@@ -636,23 +644,30 @@ class ScanAutogradOp(torch.autograd.Function):
                     ],
                     dim + 1,
                 )
-                grads_x_parts = torch.concat(
-                    [
-                        torch.stack(
-                            [
-                                torch.ones_like(gp)
-                                if ind == 0
-                                else torch.zeros_like(gp)
-                                for ind, gp in enumerate(
-                                    aten.slice(grads_x_parts, dim + 1, 0, 1, 1)
-                                )
-                            ],
-                            0,
-                        ),
-                        aten.slice(grads_x_parts, dim + 1, 1, None, 1),
-                    ],
-                    dim + 1,
-                )
+                # grads_x_parts = torch.concat(
+                #     [
+                #         torch.stack(
+                #             [
+                #                 torch.ones_like(gp)
+                #                 if ind == 0
+                #                 else torch.zeros_like(gp)
+                #                 for ind, gp in enumerate(
+                #                     aten.slice(grads_x_parts, dim + 1, 0, 1, 1)
+                #                 )
+                #             ],
+                #             0,
+                #         ),
+                #         aten.slice(grads_x_parts, dim + 1, 1, None, 1),
+                #     ],
+                #     dim + 1,
+                # )
+                # grads_additional_inputs_parts = torch.concat(
+                #     [
+                #         torch.zeros_like(aten.slice(grads_additional_inputs_parts, dim + 1, 0, 1, 1)),
+                #         aten.slice(grads_additional_inputs_parts, dim + 1, 1, None, 1),
+                #     ],
+                #     dim + 1,
+                # )
 
                 # Prepare the components for the gradient computation
                 grads_h_parts = aten.slice(
@@ -664,7 +679,6 @@ class ScanAutogradOp(torch.autograd.Function):
                     -1,
                     1,
                 )
-                grads_x = torch.flip(torch.sum(grads_x_parts, 0), [dim])
                 flat_grads = torch.unsqueeze(
                     aten.slice(
                         torch.concat([torch.flip(flat_grads, [dim]), ones], dim),
@@ -705,28 +719,124 @@ class ScanAutogradOp(torch.autograd.Function):
                     * flat_grads
                 )
 
-                """Step 4 + 5"""
-                grad = torch.flip(torch.sum(grads_h_prod_mat * grads_x, 0), [dim])
-                return grad
+                # """Step 4 + 5"""
+                # grad = torch.flip(torch.sum(grads_h_prod_mat * grads_x, 0), [dim])
+                # # If the lifted parameter was had a time dimension, one would have to flip it here
+                # # However, since there is no time dimension and the result is simply summed
+                # # Here one needs to multiply with maybe broadcast and then collect only the relevant values back
+                # # E.g. multiply the matrix with shape 3x3x2x2 with 3x2 by broadcasting the last dim from 3x2 to the matrix 2x2
+                # # and then collecting the corresponding values back
+                # def broadcast_mul(mat, el):
+                #     return mat * el
+                # broadcast_mul_mapped = torch.vmap(broadcast_mul, 0, 0)
+                # def multiply_with_maybe_broadcast(grads_h_prod_mat):
+                #     return broadcast_mul_mapped(grads_h_prod_mat, grads_additional_inputs)
+                # multiply_with_maybe_broadcast_mapped_time = torch.vmap(multiply_with_maybe_broadcast, 0, 0)
 
-            compute_gradient_for_leaf_mapped = torch.vmap(
-                compute_gradient_for_leaf, 0, 0
+                # def maybe_extract_grads(grad2):
+                #     target_additional_input_shape = (len(grads_additional_inputs_parts.shape) - 2)
+                #     # extract_shape = [None] * target_additional_input_shape + [-1] * (len(grad2.shape) - target_additional_input_shape)
+                #     # return [aten.slice(grad2, -1, 0, 0, 1)]
+                #     for _ in range(len(grad2.shape) - target_additional_input_shape):
+                #         grad2 = torch.squeeze(aten.slice(grad2, 0, 0, 1, 1), 0)
+                #     return grad2
+
+                # grad2 = torch.sum(multiply_with_maybe_broadcast_mapped_time(grads_h_prod_mat), [0, 1])
+                # grad2 = maybe_extract_grads(grad2)
+                # return grad, grad2
+                return grads_h_prod_mat
+
+            compute_gradient_mat_for_leaf_mapped = torch.vmap(
+                compute_gradient_mat_for_leaf, 0, 0
             )
 
-            # Compute the gradients for all the leaves in parallel
-            grads = torch.split(
-                compute_gradient_for_leaf_mapped(
+            grads_h_prod_mat = reverse_vmap_stack(
+                compute_gradient_mat_for_leaf_mapped(
                     torch.stack(grads_h_parts),
-                    torch.stack(grads_x_parts),
                     torch.stack(flat_grads),
-                ),
-                1,
-                0,
+                )
             )
+            
+            def compute_gradients_xs(grads_h_prod_mat, grads_x_parts):
+                
+                grads_x_parts = torch.concat(
+                    [
+                        torch.stack(
+                            [
+                                torch.ones_like(gp)
+                                if ind == 0
+                                else torch.zeros_like(gp)
+                                for ind, gp in enumerate(
+                                    aten.slice(grads_x_parts, dim + 1, 0, 1, 1)
+                                )
+                            ],
+                            0,
+                        ),
+                        aten.slice(grads_x_parts, dim + 1, 1, None, 1),
+                    ],
+                    dim + 1,
+                )
+                grads_x = torch.flip(torch.sum(grads_x_parts, 0), [dim])
+                grads_xs = torch.flip(torch.sum(grads_h_prod_mat * grads_x, 0), [dim])
+                return grads_xs
+            
+            compute_gradients_xs_leaf_mapped = torch.vmap(compute_gradients_xs, 0, 0)
+            grads_xs = reverse_vmap_stack(compute_gradients_xs_leaf_mapped(torch.stack(grads_h_prod_mat), torch.stack(grads_x_parts)))
+            
+            def compute_gradients_additional_inputs(grads_h_prod_mat, shifted_outs, xs):
+                # grads_additional_inputs_parts = torch.concat(
+                #     [
+                #         torch.zeros_like(aten.slice(grads_additional_inputs_parts, dim + 1, 0, 1, 1)),
+                #         aten.slice(grads_additional_inputs_parts, dim + 1, 1, None, 1),
+                #     ],
+                #     dim + 1,
+                # )
+                # grads_additional_inputs = torch.flip(torch.sum(grads_additional_inputs_parts, 0), [dim])
+                # grads = joint_graph(*grads_h_prod_mat, *xs, *additional_inputs)
+                def joint_graph_wrapper(*args):
+                    return joint_graph(*args, *additional_inputs)
+                mapped_scan_dim_joint_graph = torch.vmap(joint_graph_wrapper, 0, 0)
+                grads_add_inp = mapped_scan_dim_joint_graph(*grads_h_prod_mat, *shifted_outs, *xs)[2 * num_xs:]
+                # print(grads_add_inp)
+                return grads_add_inp
+            
+            # compute_gradients_compute_gradients_additional_inputs_leaf_mapped = torch.vmap(compute_gradients_additional_inputs, 0, 0)
+            # grads_add_inp = compute_gradients_compute_gradients_additional_inputs_leaf_mapped(torch.sum(torch.stack(grads_h_prod_mat), dim + 2), torch.stack(shifted_outs), torch.stack(xs))
+            grads_add_inp = compute_gradients_additional_inputs([torch.sum(leaf, dim + 1) for leaf in grads_h_prod_mat], shifted_outs, xs)
+            grads_add_inp = [torch.sum(el[:, 1:], (0, 1)) for el in grads_add_inp]
+            
+            # """Step 4 + 5"""
+            # grad = torch.flip(torch.sum(grads_h_prod_mat * grads_x, 0), [dim])
+            # # If the lifted parameter was had a time dimension, one would have to flip it here
+            # # However, since there is no time dimension and the result is simply summed
+            # # Here one needs to multiply with maybe broadcast and then collect only the relevant values back
+            # # E.g. multiply the matrix with shape 3x3x2x2 with 3x2 by broadcasting the last dim from 3x2 to the matrix 2x2
+            # # and then collecting the corresponding values back
+            # def broadcast_mul(mat, el):
+            #     return mat * el
+            # broadcast_mul_mapped = torch.vmap(broadcast_mul, 0, 0)
+            # def multiply_with_maybe_broadcast(grads_h_prod_mat):
+            #     return broadcast_mul_mapped(grads_h_prod_mat, grads_additional_inputs)
+            # multiply_with_maybe_broadcast_mapped_time = torch.vmap(multiply_with_maybe_broadcast, 0, 0)
+
+            # def maybe_extract_grads(grad2):
+            #     target_additional_input_shape = (len(grads_additional_inputs_parts.shape) - 2)
+            #     # extract_shape = [None] * target_additional_input_shape + [-1] * (len(grad2.shape) - target_additional_input_shape)
+            #     # return [aten.slice(grad2, -1, 0, 0, 1)]
+            #     for _ in range(len(grad2.shape) - target_additional_input_shape):
+            #         grad2 = torch.squeeze(aten.slice(grad2, 0, 0, 1, 1), 0)
+            #     return grad2
+
+            # grad2 = torch.sum(multiply_with_maybe_broadcast_mapped_time(grads_h_prod_mat), [0, 1])
+            # grad2 = maybe_extract_grads(grad2)
+            
+            
+            # grads = torch.split(grads, 1, 0)
+            # grads2 = torch.split(grads2, 1, 0)
 
             # Mask all gradients for input variables that do not require gradients
-            grads = expand_grads_with_None(grads, xs_mask)
-            
+            grads_xs = expand_grads_with_None(grads_xs, xs_mask)
+            grads_add_inp = expand_grads_with_None(grads_add_inp, additional_inputs_mask)
 
         return (*outs,)
 
@@ -855,6 +965,9 @@ class ScanAutogradOp(torch.autograd.Function):
                 else:
                     g_list.append(None)
             return g_list
+        
+        def reverse_vmap_stack(res_stacked):
+                return [torch.squeeze(el, 0) for el in torch.split(res_stacked, 1, 0)]
 
         with torch._C._AutoDispatchBelowAutograd():
             """Step 1"""
@@ -928,30 +1041,13 @@ class ScanAutogradOp(torch.autograd.Function):
             eye = expand_to_equal_dims(eye, len_shape + 1)
             a_eye = triu + tril2
 
-            def compute_gradient_for_leaf(grads_h_parts, grads_x_parts, flat_grads):
+            def compute_gradient_mat_for_leaf(grads_h_parts, flat_grads):
                 # The first output of the associative_scan operation is always the first element of xs.
                 # Therefore, the first grads_h is always zero and the first grads_x is always 1
                 grads_h_parts = torch.concat(
                     [
                         torch.zeros_like(aten.slice(grads_h_parts, dim + 1, 0, 1, 1)),
                         aten.slice(grads_h_parts, dim + 1, 1, None, 1),
-                    ],
-                    dim + 1,
-                )
-                grads_x_parts = torch.concat(
-                    [
-                        torch.stack(
-                            [
-                                torch.ones_like(gp)
-                                if ind == 0
-                                else torch.zeros_like(gp)
-                                for ind, gp in enumerate(
-                                    aten.slice(grads_x_parts, dim + 1, 0, 1, 1)
-                                )
-                            ],
-                            0,
-                        ),
-                        aten.slice(grads_x_parts, dim + 1, 1, None, 1),
                     ],
                     dim + 1,
                 )
@@ -966,7 +1062,6 @@ class ScanAutogradOp(torch.autograd.Function):
                     -1,
                     1,
                 )
-                grads_x = torch.flip(torch.sum(grads_x_parts, 0), [dim])
                 flat_grads = torch.unsqueeze(
                     aten.slice(
                         torch.concat([torch.flip(flat_grads, [dim]), ones], dim),
@@ -1007,30 +1102,71 @@ class ScanAutogradOp(torch.autograd.Function):
                     * flat_grads
                 )
 
-                """Step 4 + 5"""
-                grad = torch.flip(torch.sum(grads_h_prod_mat * grads_x, 0), [dim])
-                return grad
+                return grads_h_prod_mat
 
-            compute_gradient_for_leaf_mapped = torch.vmap(
-                compute_gradient_for_leaf, 0, 0
+            compute_gradient_mat_for_leaf_mapped = torch.vmap(
+                compute_gradient_mat_for_leaf, 0, 0
             )
 
-            # Compute the gradients for all the leaves in parallel
-            grads = torch.split(
-                compute_gradient_for_leaf_mapped(
+            grads_h_prod_mat = reverse_vmap_stack(
+                compute_gradient_mat_for_leaf_mapped(
                     torch.stack(grads_h_parts),
-                    torch.stack(grads_x_parts),
                     torch.stack(flat_grads),
-                ),
-                1,
-                0,
+                )
             )
-
+            
+            def compute_gradients_xs(grads_h_prod_mat, grads_x_parts):
+                
+                grads_x_parts = torch.concat(
+                    [
+                        torch.stack(
+                            [
+                                torch.ones_like(gp)
+                                if ind == 0
+                                else torch.zeros_like(gp)
+                                for ind, gp in enumerate(
+                                    aten.slice(grads_x_parts, dim + 1, 0, 1, 1)
+                                )
+                            ],
+                            0,
+                        ),
+                        aten.slice(grads_x_parts, dim + 1, 1, None, 1),
+                    ],
+                    dim + 1,
+                )
+                grads_x = torch.flip(torch.sum(grads_x_parts, 0), [dim])
+                grads_xs = torch.flip(torch.sum(grads_h_prod_mat * grads_x, 0), [dim])
+                return grads_xs
+            
+            """Step 4 + 5 (For the inputs xs)"""
+            compute_gradients_xs_leaf_mapped = torch.vmap(compute_gradients_xs, 0, 0)
+            grads_xs = reverse_vmap_stack(compute_gradients_xs_leaf_mapped(torch.stack(grads_h_prod_mat), torch.stack(grads_x_parts)))
+            
+            def compute_gradients_additional_inputs(grads_h_prod_mat, shifted_outs, xs):
+                # def joint_graph_wrapper(fg, sh_out, xs):
+                #     return joint_graph(fg, sh_out, xs, *additional_inputs)
+                # mapped_scan_dim_joint_graph = torch.vmap(joint_graph_wrapper, 0, 0)
+                # grads_add_inp = mapped_scan_dim_joint_graph(grads_h_prod_mat, shifted_outs, xs)[2 * num_xs:]
+                # return grads_add_inp
+                def joint_graph_wrapper(*args):
+                    return joint_graph(*args, *additional_inputs)
+                mapped_scan_dim_joint_graph = torch.vmap(joint_graph_wrapper, 0, 0)
+                grads_add_inp = mapped_scan_dim_joint_graph(*grads_h_prod_mat, *shifted_outs, *xs)[2 * num_xs:]
+                return grads_add_inp
+            
+            """Step 4 + 5 (For the additional inputs)"""
+            # compute_gradients_compute_gradients_additional_inputs_leaf_mapped = torch.vmap(compute_gradients_additional_inputs, 0, 0)
+            # grads_add_inp = compute_gradients_compute_gradients_additional_inputs_leaf_mapped(torch.sum(torch.stack(grads_h_prod_mat), dim + 2), torch.stack(shifted_outs), torch.stack(xs))
+            # grads_add_inp = [torch.sum(el[:, 1:], (0, 1)) for el in grads_add_inp]
+            grads_add_inp = compute_gradients_additional_inputs([torch.sum(leaf, dim + 1) for leaf in grads_h_prod_mat], shifted_outs, xs)
+            grads_add_inp = [torch.sum(el[:, 1:], (0, 1)) for el in grads_add_inp]
+            
             # Mask all gradients for input variables that do not require gradients
-            grads = expand_grads_with_None(grads, xs_mask)
+            grads_xs = expand_grads_with_None(grads_xs, xs_mask)
+            grads_add_inp = expand_grads_with_None(grads_add_inp, additional_inputs_mask)
 
             # pdb.set_trace()
-            return *[None] * 5, *grads, *[None] * num_additional_inputs
+            return *[None] * 5, *grads_xs, *grads_add_inp
 
 
 @associative_scan_op.py_impl(DispatchKey.Autograd)
