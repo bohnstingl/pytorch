@@ -363,8 +363,6 @@ class TestControlFlow(TestCase):
         expected_grads = torch.autograd.grad(result_exp_flatten, params, grad_exp_init)
         grad_init = [torch.ones_like(el) for el in result_flatten]
         grads = torch.autograd.grad(result_flatten, params, grad_init)
-        # print(grads[1])
-        # print(expected_grads[1])
         self.assertEqual(grads, expected_grads, atol=6e-05, rtol=6e-06)
 
     def test_cond_no_trace(self):
@@ -1821,7 +1819,9 @@ def forward(self, pred_1, x_1):
             torch._dynamo.exc.Unsupported,
             "Observed exception.*",
         ):
-            result = associative_scan(fct_wrong_pytree, inp, dim=0, combine_mode="generic")
+            result = associative_scan(
+                fct_wrong_pytree, inp, dim=0, combine_mode="generic"
+            )
 
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
@@ -2103,8 +2103,8 @@ def forward(self, pred_1, x_1):
 
         n_params = 6
         autograds = []
-        autograds.append([True, True, True, True, True, True])
-        autograds.append([False, False, False, False, False, False])
+        # autograds.append([True, True, True, True, True, True])
+        # autograds.append([False, False, False, False, False, False])
         autograds.append([False, True, False, False, False, False])
         for _ in range(5):
             autograds.append([bool(random.randint(0, 1)) for _ in range(n_params)])
@@ -2121,7 +2121,9 @@ def forward(self, pred_1, x_1):
             )
 
             expected_result = _fake_associative_scan(mul2, inp, 0, reverse=reverse)
-            result = fct_cmp(mul2, inp, dim=0, combine_mode=combine_mode, reverse=reverse)
+            result = fct_cmp(
+                mul2, inp, dim=0, combine_mode=combine_mode, reverse=reverse
+            )
             self.assertEqual(result, expected_result)
 
             grad_param = [p for p, m in zip(inp, a_grads) if m]
@@ -3063,17 +3065,13 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
     return (getitem, getitem_1)""",  # noqa: B950
         )
 
-
     # TODO: Support Autograd for associative scan
     @unittest.skipIf(not SM70OrLater, "triton")
     @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
     @parametrize("reverse", [False, True])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
-    # @parametrize("device", [torch.device("cuda")])
     @parametrize("combine_mode", ["pointwise", "generic"])
-    # @parametrize("combine_mode", ["pointwise"])
     @parametrize("autograd", [False, True])
-    # @parametrize("autograd", [True])
     # Skipping the combine_mode=pointwise
     # as the current implementation of associative_scan lowering
     # does not support lifted arguments
@@ -3082,41 +3080,36 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
         lambda params: (params["combine_mode"] == "pointwise"),
     )
     def test_associative_scan_freevars2(self, reverse, device, combine_mode, autograd):
-        # TODO: Create a testcase where there are more lifted variables than input variables
         H = torch.rand(2, device=device, requires_grad=autograd)
-        # H = torch.ones(1, device=device, requires_grad=autograd) * 2
 
         def fct_freevars1(x: torch.Tensor, y: torch.Tensor):
-            # return x + (y * H)
             return x * H + y * 2
 
         def fct_freevars2(x: torch.Tensor, y: torch.Tensor):
             return x * H + y * H
-        
+
         H1 = torch.rand(1, device=device, requires_grad=autograd)
         H2 = torch.rand(1, device=device, requires_grad=autograd)
-        
+
         def fct_freevars3(x: torch.Tensor, y: torch.Tensor):
             return x * H1 + y * H2
 
         inp = torch.randn(3, 2, 2, device=device, requires_grad=autograd)
-        # inp = torch.unsqueeze(torch.arange(1, 4, dtype=torch.float32, device=device, requires_grad=autograd), 1)
 
-        for fct, param in [(fct_freevars1, (H,)), (fct_freevars2, (H,))]:#, (fct_freevars3, (H1, H2))]:
-        # for fct, param in [(fct_freevars1, (H,)), (fct_freevars2, (H,)), (fct_freevars3, (H1, H2))]:
-        # for fct, param in [(fct_freevars3, (H1, H2))]:
-        # for fct, param in [(fct_freevars1, (H,))]:
-            # for fct in [fct_freevars1]:
+        for fct, param in [
+            (fct_freevars1, (H,)),
+            (fct_freevars2, (H,)),
+            (fct_freevars3, (H1, H2)),
+        ]:
             result = associative_scan(
                 fct, inp, dim=0, reverse=reverse, combine_mode=combine_mode
             )
             expected_result = _fake_associative_scan(fct, inp, 0, reverse=reverse)
             self.assertEqual(result, expected_result)
-            
+
             if autograd:
                 self.check_autograd(result, expected_result, (inp, *param))
-            
-    
+
     # TODO: Support Autograd for associative scan
     @unittest.skipIf(not SM70OrLater, "triton")
     @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
@@ -3132,7 +3125,7 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
     )
     def test_associative_scan_freevars_shape_check(self, reverse, device, combine_mode):
         H = torch.eye(2, device=device, requires_grad=True)
-        
+
         def fct_freevars(x: torch.Tensor, y: torch.Tensor):
             return x @ H + y
 
@@ -3143,7 +3136,6 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
         )
         expected_result = _fake_associative_scan(fct_freevars, inp, 2, reverse=reverse)
         self.assertEqual(result, expected_result)
-            
 
     # TODO: Support Autograd for associative scan
     @unittest.skipIf(not SM70OrLater, "triton")
@@ -3158,9 +3150,7 @@ def forward(self, L_init_ : torch.Tensor, L_xs_ : torch.Tensor):
         unittest.skip,
         lambda params: (params["combine_mode"] == "pointwise"),
     )
-    def test_associative_scan_freevars_pytree(
-        self, reverse, device, combine_mode
-    ):
+    def test_associative_scan_freevars_pytree(self, reverse, device, combine_mode):
         xf = torch.randn(2, 2, device=device, requires_grad=True)
         yf = torch.randn(2, 2, device=device, requires_grad=True)
         zf = torch.randn(2, 2, device=device, requires_grad=True)
