@@ -1064,16 +1064,12 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
 
         # Trace the subgraph
         # TODO: Fix these pointless new_empty calls appearing in the dynamo output graph.
+        # The sub_args is a slice of original input, e.g. if input.size is (3, 4), and scan dim=0
+        # the sub_args shape will be (4, ).
         sub_args = [
             _make_inlined(tx, first_slice_copy)(leaf)
             for leaf in itertools.chain(xs.items, xs.items)
         ]
-        
-        # The sub_args is a slice of original input, e.g. if input.size is (3, 4), and scan dim=0
-        # the sub_args shape will be (4, ).
-        # sub_args = [
-        #     _make_inlined(tx, first_slice_copy)(inp, dim) for inp in xs.items
-        # ]
         
         sub_args_additional_inputs = [
             t.call_method(tx, "clone", args=(), kwargs={})
