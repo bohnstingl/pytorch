@@ -415,7 +415,7 @@ def trace_associative_scan(
 ):
     with disable_proxy_modes_tracing():
         sample_xs = [first_slice_copy(x) for x in itertools.chain(xs, xs)]
-        combine_graph = reenter_make_fx(combine_fn)(*sample_xs)
+        combine_graph = reenter_make_fx(combine_fn)(*sample_xs, *additional_inputs)
 
     outputs = None
     for node in combine_graph.graph.nodes:
