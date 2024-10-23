@@ -7,7 +7,10 @@ import torch
 import torch.utils._pytree as pytree
 from functorch.experimental import control_flow
 from functorch.experimental.control_flow import cond, UnsupportedAliasMutationException
-from torch._higher_order_ops.associative_scan import associative_scan
+from torch._higher_order_ops.associative_scan import (
+    _fake_associative_scan,
+    associative_scan,
+)
 from torch._higher_order_ops.scan import _fake_scan, scan
 from torch._higher_order_ops.while_loop import while_loop
 from torch._subclasses.functional_tensor import (
@@ -86,32 +89,46 @@ def _fake_while_loop(cond_fn, body_fn, operands):
     return operands
 
 
-def _fake_associative_scan(combine_fn, xs, dim, reverse=False):
-    inp_leaves, spec = pytree.tree_flatten(xs)
+def _fake_scan(combine_fn, init, xs=None, dim=0, reverse=False):  # noqa: F811
+    carry_leaves, carry_spec = pytree.tree_flatten(init)
+    inp_leaves, inp_spec = pytree.tree_flatten(xs)
+    if xs is None or len(inp_leaves) == 0:
+        return init, []
     result_flat = []
-    num_leaves = len(inp_leaves)
+    carry = carry_leaves
     op = reversed if reverse else lambda x: x
 
+    dummy_carry, dummy_out = combine_fn(
+        pytree.tree_unflatten(carry, carry_spec),
+        pytree.tree_unflatten(
+            [torch._ops.ops.aten.slice(elem, dim, 0, 1, 1) for elem in inp_leaves],
+            inp_spec,
+        ),
+    )
+    dummy_out_leaves, dummy_out_spec = pytree.tree_flatten(dummy_out)
+    num_leaves = len(dummy_out_leaves)
+
     for ind in op(range(inp_leaves[0].size(dim))):
-        r = [
-            inp_leaves[leave_ind][(slice(None),) * dim + (ind,)]
-            for leave_ind in range(num_leaves)
+        xs = [
+            torch._ops.ops.aten.slice(elem, dim, ind, ind + 1, 1) for elem in inp_leaves
         ]
-        if (ind > 0 and not reverse) or (
-            ind < (inp_leaves[0].size(dim) - 1) and reverse
-        ):
-            r = combine_fn(
-                pytree.tree_unflatten(result_flat[-1], spec),
-                pytree.tree_unflatten(r, spec),
-            )
-        r_flat, _ = pytree.tree_flatten(r)
-        result_flat.append(r_flat)
+
+        carry, y = combine_fn(
+            pytree.tree_unflatten(carry, carry_spec),
+            pytree.tree_unflatten(xs, inp_spec),
+        )
+        carry, _ = pytree.tree_flatten(carry)
+        y, _ = pytree.tree_flatten(y)
+        result_flat.append(y)
 
     results = [
-        torch.stack([e[leave_ind] for e in op(result_flat)], dim)
+        torch.concatenate([e[leave_ind] for e in op(result_flat)], dim)
         for leave_ind in range(num_leaves)
     ]
-    return pytree.tree_unflatten(results, spec)
+    return (
+        pytree.tree_unflatten(carry, carry_spec),
+        pytree.tree_unflatten(results, dummy_out_spec),
+    )
 
 
 def compile_mode_helper(fct, compile_mode):
@@ -1541,7 +1558,7 @@ def forward(self, pred_1, x_1):
 
         num_dims = [random.randint(2, 5) for _ in range(10)]
         for num_dim in num_dims:
-            shapes = [random.randint(1, 10) for _ in range(num_dim)]
+            shapes = [random.randint(1, 9) for _ in range(num_dim)]
             rnd_scan_dim = random.randint(0, num_dim - 1)
             x = torch.randn(*shapes, device=device)
 
@@ -1620,7 +1637,7 @@ def forward(self, pred_1, x_1):
         A = torch.randn(state_dim, requires_grad=True, device=device)
         elements = (A.repeat((timesteps, 1)), projected_inputs)
 
-        result1 = associative_scan(
+        result = associative_scan(
             get_scan_combine_fn("s5_operator", True),
             elements,
             0,
@@ -1631,10 +1648,10 @@ def forward(self, pred_1, x_1):
             get_scan_combine_fn("s5_operator", True), elements, 0, reverse=reverse
         )
         self.assertEqual(
-            result1,
+            result,
             expected_result,
         )
-        self.assertEqual([r.device.type for r in result1], [device.type] * len(result1))
+        self.assertEqual([r.device.type for r in result], [device.type] * len(result))
 
     @requires_cuda
     @parametrize("reverse", [False, True])
@@ -1692,7 +1709,7 @@ def forward(self, pred_1, x_1):
         y = torch.randn(3, 2, 2, device=device)
         inp = (x, y)
 
-        result1 = associative_scan(
+        result = associative_scan(
             get_scan_combine_fn("tuple_fct", True),
             inp,
             0,
@@ -1702,7 +1719,7 @@ def forward(self, pred_1, x_1):
         expected_result = _fake_associative_scan(
             get_scan_combine_fn("tuple_fct", True), inp, 0, reverse=reverse
         )
-        self.assertEqual(result1, expected_result)
+        self.assertEqual(result, expected_result)
 
     @skipIfRocm(msg="Unsupported on ROCM yet")
     @requires_cuda
@@ -1785,15 +1802,6 @@ def forward(self, pred_1, x_1):
         ),
     )
     def test_associative_scan_complex_pytree(self, combine_mode, reverse, device):
-        def fct_pointwise(x, y):
-            return {
-                "i": x["i"] * y["i"],
-                "j": (
-                    [x["j"][0][0] * y["j"][0][0]],
-                    [{"o": x["j"][1][0]["o"] + y["j"][1][0]["o"]}],
-                ),
-            }
-
         x = torch.randn(3, 2, 2, device=device)
         y = torch.randn(3, 2, 2, device=device)
         z = torch.randn(3, 2, 2, device=device)
@@ -1965,8 +1973,8 @@ def forward(self, pred_1, x_1):
             1,
             reverse=reverse,
         )
-        result1 = fct_cmp(inp)
-        self.assertEqual(result1, expected_result)
+        result = fct_cmp(inp)
+        self.assertEqual(result, expected_result)
 
     # TODO: provide an implementation for all compile modes and re-enable all test
     @unittest.skipIf(not SM70OrLater, "triton")
@@ -2016,8 +2024,8 @@ def forward(self, pred_1, x_1):
             0,
             reverse=reverse,
         )
-        result1 = fct_cmp(inp)
-        self.assertEqual(result1, expected_result)
+        result = fct_cmp(inp)
+        self.assertEqual(result, expected_result)
 
     # TODO: provide an implementation for all compile modes and re-enable all test
     @requires_cuda
