@@ -354,7 +354,7 @@ def trace_associative_scan(
 
 @associative_scan_op.py_impl(DispatchKey.CompositeExplicitAutograd)
 def associative_scan_op_dense(combine_fn, xs):
-    raise NotImplementedError("associative_scan is not implemented for eager")
+    return generic_associative_scan(combine_fn, xs)
 
 
 associative_scan_op.py_impl(DispatchKey.Autograd)(

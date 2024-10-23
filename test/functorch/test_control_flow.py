@@ -1301,7 +1301,7 @@ def forward(self, pred_1, x_1):
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
     @parametrize("reverse", [False, True])
-    @parametrize("compile_mode", ["none", "compile", "compile_dynamic_shape"])
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
     @parametrize("combine_mode", ["pointwise", "generic"])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
@@ -1539,8 +1539,9 @@ def forward(self, pred_1, x_1):
 
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
-    @parametrize("reverse", [False, True])
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
     @parametrize("combine_mode", ["pointwise", "generic"])
+    @parametrize("reverse", [False, True])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
     # as the current implementation of pointwise does only support CUDA device
@@ -1551,12 +1552,12 @@ def forward(self, pred_1, x_1):
             and (params["device"] == torch.device("cpu") or torch.version.hip)
         ),
     )
-    def test_associative_scan_dim(self, combine_mode, reverse, device):
+    def test_associative_scan_dim(self, compile_mode, combine_mode, reverse, device):
         import random
-
         random.seed(10)
+        scan_fct = compile_mode_helper(associative_scan, compile_mode)
 
-        num_dims = [random.randint(2, 5) for _ in range(10)]
+        num_dims = [random.randint(2, 5) for _ in range(4)]
         for num_dim in num_dims:
             shapes = [random.randint(1, 9) for _ in range(num_dim)]
             rnd_scan_dim = random.randint(0, num_dim - 1)
@@ -1566,7 +1567,7 @@ def forward(self, pred_1, x_1):
                 (get_scan_combine_fn("add", True), torch.cumsum),
                 (get_scan_combine_fn("mul", True), torch.cumprod),
             ]:
-                result = associative_scan(
+                result = scan_fct(
                     op, x, rnd_scan_dim, reverse=reverse, combine_mode=combine_mode
                 )
                 result_exp = _fake_associative_scan(
@@ -1616,6 +1617,7 @@ def forward(self, pred_1, x_1):
     @skipIfRocm(msg="Unsupported on ROCM yet")
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
     @parametrize("combine_mode", ["pointwise", "generic"])
     @parametrize("reverse", [False, True])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
@@ -1628,7 +1630,7 @@ def forward(self, pred_1, x_1):
             and (params["device"] == torch.device("cpu") or torch.version.hip)
         ),
     )
-    def test_associative_scan_binary_operator(self, combine_mode, reverse, device):
+    def test_associative_scan_binary_operator(self, compile_mode, combine_mode, reverse, device):
         state_dim = 20
         timesteps = 10
         projected_inputs = torch.randn(
@@ -1637,7 +1639,9 @@ def forward(self, pred_1, x_1):
         A = torch.randn(state_dim, requires_grad=True, device=device)
         elements = (A.repeat((timesteps, 1)), projected_inputs)
 
-        result = associative_scan(
+        scan_fct = compile_mode_helper(associative_scan, compile_mode)
+
+        result = scan_fct(
             get_scan_combine_fn("s5_operator", True),
             elements,
             0,
@@ -1692,6 +1696,7 @@ def forward(self, pred_1, x_1):
     @skipIfRocm(msg="Unsupported on ROCM yet")
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
     @parametrize("combine_mode", ["pointwise", "generic"])
     @parametrize("reverse", [False, True])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
@@ -1704,12 +1709,14 @@ def forward(self, pred_1, x_1):
             and (params["device"] == torch.device("cpu") or torch.version.hip)
         ),
     )
-    def test_associative_scan_tuple(self, combine_mode, reverse, device):
+    def test_associative_scan_tuple(self, compile_mode, combine_mode, reverse, device):
         x = torch.randn(3, 2, 2, device=device)
         y = torch.randn(3, 2, 2, device=device)
         inp = (x, y)
+        
+        scan_fct = compile_mode_helper(associative_scan, compile_mode)
 
-        result = associative_scan(
+        result = scan_fct(
             get_scan_combine_fn("tuple_fct", True),
             inp,
             0,
@@ -1789,6 +1796,7 @@ def forward(self, pred_1, x_1):
 
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
     @parametrize("combine_mode", ["pointwise", "generic"])
     @parametrize("reverse", [False, True])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
@@ -1801,13 +1809,14 @@ def forward(self, pred_1, x_1):
             and (params["device"] == torch.device("cpu") or torch.version.hip)
         ),
     )
-    def test_associative_scan_complex_pytree(self, combine_mode, reverse, device):
+    def test_associative_scan_complex_pytree(self, compile_mode, combine_mode, reverse, device):
         x = torch.randn(3, 2, 2, device=device)
         y = torch.randn(3, 2, 2, device=device)
         z = torch.randn(3, 2, 2, device=device)
         inp = {"i": x, "j": ([y], [{"o": z}])}
+        scan_fct = compile_mode_helper(associative_scan, compile_mode)
 
-        result = associative_scan(
+        result = scan_fct(
             get_scan_combine_fn("complex_pointwise", True),
             inp,
             0,
@@ -1888,7 +1897,7 @@ def forward(self, pred_1, x_1):
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
     @parametrize("combine_mode", ["pointwise", "generic"])
-    @parametrize("compile_mode", ["none", "compile", "compile_dynamic_shape"])
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
     @parametrize("reverse", [False, True])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
@@ -1928,7 +1937,7 @@ def forward(self, pred_1, x_1):
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
     @parametrize("combine_mode", ["pointwise", "generic"])
-    @parametrize("compile_mode", ["none", "compile", "compile_dynamic_shape"])
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
     @parametrize("reverse", [False, True])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
@@ -1980,7 +1989,7 @@ def forward(self, pred_1, x_1):
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
     @parametrize("combine_mode", ["pointwise", "generic"])
-    @parametrize("compile_mode", ["none", "compile", "compile_dynamic_shape"])
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
     @parametrize("reverse", [False, True])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
@@ -2138,6 +2147,7 @@ def forward(self, pred_1, x_1):
 
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
+    @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
     @parametrize("reverse", [False, True])
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of associative_scan and device=cpu
@@ -2146,12 +2156,14 @@ def forward(self, pred_1, x_1):
         unittest.skip,
         lambda params: (params["device"] == torch.device("cpu")),
     )
-    def test_associative_scan_non_pointwise_generic(self, reverse, device):
+    def test_associative_scan_non_pointwise_generic(self, compile_mode, reverse, device):
         x = torch.randn(3, 10, 2, device=device)
+        scan_fct = compile_mode_helper(associative_scan, compile_mode)
+        
         result_expected = _fake_associative_scan(
             get_scan_combine_fn("non_pointwise", True), x, 0, reverse=reverse
         )
-        result1 = associative_scan(
+        result1 = scan_fct(
             get_scan_combine_fn("non_pointwise", True),
             x,
             0,
