@@ -23,7 +23,17 @@ from torch.fx.experimental.proxy_tensor import (
     track_tensor_tree,
 )
 
-from .utils import _from_fun, _maybe_reenter_make_fx, create_fw_bw_graph
+from .utils import (
+    _from_fun,
+    _maybe_reenter_make_fx,
+    create_fw_bw_graph,
+    get_gradient_mask,
+    mask_gradient_none,
+)
+
+
+def replace_gradient_with_zeros(grads, old_grad, mask):
+    return [g if m else torch.zeros_like(o) for g, o, m in zip(grads, old_grad, mask)]
 
 
 def create_fw_bw_graph_combinefn(cond_fn, body_fn, carried_inputs, additional_inputs):
@@ -41,6 +51,8 @@ def create_fw_bw_graph_combinefn(cond_fn, body_fn, carried_inputs, additional_in
             num_additional_inputs = len(additional_inputs)
 
             fw_xs = [pytree.tree_map(_from_fun, x) for x in carried_inputs]
+            xs_mask = get_gradient_mask(carried_inputs)
+
             fw_xs_list = [
                 torch.unsqueeze(pytree.tree_map(_from_fun, x), 0)
                 for x in carried_inputs
@@ -59,6 +71,7 @@ def create_fw_bw_graph_combinefn(cond_fn, body_fn, carried_inputs, additional_in
             bw_additional_inputs = [
                 pytree.tree_map(_from_fun, a) for a in additional_inputs
             ]
+            additional_inputs_mask = get_gradient_mask(additional_inputs)
             outs = body_fn(*fw_xs, *fw_additional_inputs)
 
             fw_outputs = [pytree.tree_map(_from_fun, o) for o in outs]
@@ -120,14 +133,21 @@ def create_fw_bw_graph_combinefn(cond_fn, body_fn, carried_inputs, additional_in
 
                 last_out = [torch.squeeze(o[rcnt], 0) for o in outs]
 
-                new_grad = joint_graph(*grad, *last_out, *bw_add_args)
+                bw_outs = joint_graph(*grad, *last_out, *bw_add_args)
+                new_grad = replace_gradient_with_zeros(bw_outs[:num_xs], grad, xs_mask)
+                new_grad_additional_inputs = bw_outs[num_xs:]
                 grad_additional_inputs = [
-                    ng * g for ng, g in zip(new_grad[num_xs:], grad_additional_inputs)
+                    ng * g if m else g
+                    for ng, g, m in zip(
+                        new_grad_additional_inputs,
+                        grad_additional_inputs,
+                        additional_inputs_mask,
+                    )
                 ]
 
-                new_grad = new_grad[:num_xs] + grad_additional_inputs
+                new_grad_additional_inputs = new_grad + grad_additional_inputs
 
-                return *new_grad, rcnt + 1, mcnt, *outs
+                return *new_grad_additional_inputs, rcnt + 1, mcnt, *outs
 
             new_joint_graph = _maybe_reenter_make_fx(wrapper_bwd)(
                 *fw_outputs_bwd,
@@ -223,6 +243,10 @@ class WhileLoopAutogradOp(torch.autograd.Function):
         )
 
         with torch._C._AutoDispatchBelowAutograd():
+            xs_mask = get_gradient_mask(xs)
+            additional_inputs_mask = get_gradient_mask(additional_inputs)
+
+            flat_grads = replace_gradient_with_zeros(flat_grads, flat_grads, xs_mask)
             out_list = [
                 torch.concat([o[1:], torch.zeros_like(o[0:1, :])], 0) for o in out_list
             ]
@@ -238,7 +262,11 @@ class WhileLoopAutogradOp(torch.autograd.Function):
             grads = while_loop_op(
                 bwd_cond_fn_graph, joint_graph, inp, tuple(additional_inputs)
             )[: num_leaves_xs + num_additional_inputs]
-            return *[None] * 5, *grads
+            grads_xs = mask_gradient_none(grads[:num_leaves_xs], xs_mask)
+            grads_additional_inputs = mask_gradient_none(
+                grads[num_leaves_xs:], additional_inputs_mask
+            )
+            return *[None] * 5, *grads_xs, *grads_additional_inputs
 
 
 class WhileLoopOp(HigherOrderOperator):
@@ -425,14 +453,14 @@ def while_loop_autograd(cond_fn, body_fn, carried_inputs, additional_inputs):
         with torch._C._AutoDispatchBelowAutograd():
             return while_loop_op(cond_fn, body_fn, carried_inputs, additional_inputs)
 
-    # TODO: Support partial gradients of inputs in the future
-    if pytree.tree_any(
-        lambda t: not t.requires_grad,  # type: ignore[union-attr]
-        (carried_inputs, additional_inputs),
-    ):
-        raise RuntimeError(
-            "while_loop currently only supports Autograd if all init, xs and lifted parameters require gradients."
-        )
+    # # TODO: Support partial gradients of inputs in the future
+    # if pytree.tree_any(
+    #     lambda t: not t.requires_grad,  # type: ignore[union-attr]
+    #     (carried_inputs, additional_inputs),
+    # ):
+    #     raise RuntimeError(
+    #         "while_loop currently only supports Autograd if all init, xs and lifted parameters require gradients."
+    #     )
 
     # TODO: The create_fw_bw is always invoked twice:
     # Once in the forward path and

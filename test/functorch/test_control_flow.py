@@ -1182,14 +1182,84 @@ def forward(self, pred_1, x_1):
 
     @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
     @parametrize("autograd", [False, True])
+    def test_while_loop_tuple_mixed_gpu_with_nograd(self, autograd):
+        def cond_fn(x, y, z):
+            return x.sum() < 7.0
+
+        def body_fn(x, y, z):
+            new_x = x + 1
+            with torch.no_grad():
+                new_y = y * x
+            new_z = z + 2
+            return (new_x, new_y, new_z)
+
+        x = torch.ones(1, dtype=torch.float32, device="cuda", requires_grad=autograd)
+        y = torch.ones(1, dtype=torch.float32, device="cuda", requires_grad=autograd)
+        z = torch.ones(2, dtype=torch.float32, device="cuda", requires_grad=autograd)
+        inp = (x, y, z)
+
+        res = while_loop(cond_fn, body_fn, inp)
+        expected = _fake_while_loop(cond_fn, body_fn, inp)
+        self.assertEqual(expected, res)
+
+        if autograd:
+            self.check_autograd(res, [expected[0], expected[2]], (x, z))
+
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("autograd", [False, True])
+    def test_while_loop_tuple_mixed_gpu_partial(self, autograd):
+        def cond_fn(x, y, z):
+            return x.sum() < 7.0
+
+        def body_fn(x, y, z):
+            return (x + 1, y * x, z + 2)
+
+        x = torch.ones(1, dtype=torch.float32, device="cuda", requires_grad=autograd)
+        y = torch.ones(1, dtype=torch.float32, device="cuda", requires_grad=False)
+        z = torch.ones(2, dtype=torch.float32, device="cuda", requires_grad=False)
+        inp = (x, y, z)
+
+        res = while_loop(cond_fn, body_fn, inp)
+        expected = _fake_while_loop(cond_fn, body_fn, inp)
+        self.assertEqual(expected, res)
+
+        if autograd:
+            self.check_autograd(res, expected[0], (x,))
+
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("autograd", [False, True])
     def test_while_loop_additional_inputs(self, autograd):
         def cond_fn(x):
             return x.sum() < 4.0
 
-        W = torch.randn(2, 2, device="cuda", requires_grad=True)
+        W = torch.randn(2, 2, device="cuda", requires_grad=autograd)
 
         def body_fn(x):
             return (torch.abs(x @ W) + x,)
+
+        x = torch.randn(
+            2, 2, dtype=torch.float32, device="cuda", requires_grad=autograd
+        )
+        inp = (x,)
+
+        res = while_loop(cond_fn, body_fn, inp)
+        expected = _fake_while_loop(cond_fn, body_fn, inp)
+        self.assertEqual(expected, res)
+
+        if autograd:
+            self.check_autograd(res, expected, (x, W))
+
+    @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
+    @parametrize("autograd", [False, True])
+    def test_while_loop_additional_inputs_partial(self, autograd):
+        def cond_fn(x):
+            return x.sum() < 4.0
+
+        W = torch.randn(2, 2, device="cuda", requires_grad=autograd)
+        H = torch.randn(2, 2, device="cuda", requires_grad=False)
+
+        def body_fn(x):
+            return (torch.abs(x @ W) + torch.abs(x @ H),)
 
         x = torch.randn(
             2, 2, dtype=torch.float32, device="cuda", requires_grad=autograd

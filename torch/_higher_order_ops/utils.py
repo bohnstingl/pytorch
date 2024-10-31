@@ -472,3 +472,15 @@ def get_dummy_aot_autograd_config():
         aot_id=0,
         keep_inference_input_mutations=False,
     )
+
+
+def get_gradient_mask(tensor_list):
+    return [True if v is not None and v.requires_grad else False for v in tensor_list]
+
+
+def mask_gradient(grads, mask):
+    return [g for g, m in zip(grads, mask) if m]
+
+
+def mask_gradient_none(grads, mask):
+    return [g if m else None for g, m in zip(grads, mask)]
