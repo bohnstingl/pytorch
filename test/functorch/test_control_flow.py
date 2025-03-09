@@ -2964,7 +2964,6 @@ class AssociativeScanModels:
     def get_scan_fct(compile_mode, combine_mode):
         # Compile the associative_scan according to the provided compile_mode
         if compile_mode != "fake":
-            compile_mode = "none"
             assoc_scan_comp = compile_mode_helper(associative_scan, compile_mode)
 
             def scan_fct(combine_fn, xs, dim, reverse):
@@ -3093,11 +3092,17 @@ class AssociativeScanTests(TestCase):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
     # as the current implementation of pointwise does only support CUDA device
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
         lambda params: (
             params["combine_mode"] == "pointwise"
-            and (params["device"] == torch.device("cpu") or torch.version.hip)
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
         ),
     )
     def test_associative_scan_compile(
@@ -3154,11 +3159,17 @@ class AssociativeScanTests(TestCase):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
     # as the current implementation of pointwise does only support CUDA device
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
         lambda params: (
             params["combine_mode"] == "pointwise"
-            and (params["device"] == torch.device("cpu") or torch.version.hip)
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
         ),
     )
     def test_associative_scan_dim(self, combine_mode, compile_mode, reverse, device):
@@ -3224,11 +3235,17 @@ class AssociativeScanTests(TestCase):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
     # as the current implementation of pointwise does only support CUDA device
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
         lambda params: (
             params["combine_mode"] == "pointwise"
-            and (params["device"] == torch.device("cpu") or torch.version.hip)
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
         ),
     )
     def test_associative_scan_tuple(self, compile_mode, combine_mode, reverse, device):
@@ -3253,13 +3270,9 @@ class AssociativeScanTests(TestCase):
     @unittest.skipIf(not SM70OrLater, "triton")
     @requires_cuda
     @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
-    @parametrize("combine_mode", ["pointwise", "generic"])
     @parametrize("reverse", [False, True])
-    @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
-    def test_associative_scan_expand_in_combine_fn(
-        self, compile_mode, combine_mode, reverse, device
-    ):
-        x = torch.randn(3, 2, 2, device=device)
+    def test_associative_scan_expand_in_combine_fn(self, compile_mode, reverse):
+        x = torch.randn(3, 2, 2, device=torch.device("cuda"))
 
         def combine_fn(x, y):
             return x * torch.sum(y, -1).expand(x.shape)
@@ -3311,11 +3324,17 @@ class AssociativeScanTests(TestCase):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
     # as the current implementation of pointwise does only support CUDA device
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
         lambda params: (
             params["combine_mode"] == "pointwise"
-            and (params["device"] == torch.device("cpu") or torch.version.hip)
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
         ),
     )
     def test_associative_scan_complex_pytree(
@@ -3348,11 +3367,17 @@ class AssociativeScanTests(TestCase):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
     # as the current implementation of pointwise does only support CUDA device
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
         lambda params: (
             params["combine_mode"] == "pointwise"
-            and (params["device"] == torch.device("cpu") or torch.version.hip)
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
         ),
     )
     def test_associative_scan_downstream_scan_matmul(
@@ -3389,11 +3414,17 @@ class AssociativeScanTests(TestCase):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
     # as the current implementation of pointwise does only support CUDA device
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
         lambda params: (
             params["combine_mode"] == "pointwise"
-            and (params["device"] == torch.device("cpu") or torch.version.hip)
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
         ),
     )
     def test_associative_scan_downstream_scan_scan(
@@ -3432,11 +3463,17 @@ class AssociativeScanTests(TestCase):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
     # as the current implementation of pointwise does only support CUDA device
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
         lambda params: (
             params["combine_mode"] == "pointwise"
-            and (params["device"] == torch.device("cpu") or torch.version.hip)
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
         ),
     )
     def test_associative_scan_downstream_scan_scan_different_dim(
@@ -3732,11 +3769,17 @@ class AssociativeScanTests(TestCase):
     @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
     # Skipping the combination of combine_mode=pointwise and device=cpu
     # as the current implementation of pointwise does only support CUDA device
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
         lambda params: (
             params["combine_mode"] == "pointwise"
-            and (params["device"] == torch.device("cpu") or torch.version.hip)
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
         ),
     )
     def test_associative_scan_binary_operator(
@@ -3846,9 +3889,18 @@ class AssociativeScanTests(TestCase):
     # Skipping the combine_mode=pointwise
     # as the current implementation of associative_scan lowering
     # does not support lifted arguments
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
-        lambda params: (params["combine_mode"] == "pointwise"),
+        lambda params: (
+            params["combine_mode"] == "pointwise"
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
+        ),
     )
     def test_associative_scan_freevars_simple(
         self, compile_mode, combine_mode, reverse, device
@@ -3897,9 +3949,18 @@ class AssociativeScanTests(TestCase):
     # Skipping the combine_mode=pointwise
     # as the current implementation of associative_scan lowering
     # does not support lifted arguments
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
-        lambda params: (params["combine_mode"] == "pointwise"),
+        lambda params: (
+            params["combine_mode"] == "pointwise"
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
+        ),
     )
     def test_associative_scan_freevars_nested(
         self, compile_mode, combine_mode, reverse, device
@@ -3976,9 +4037,18 @@ class AssociativeScanTests(TestCase):
     # Skipping the combine_mode=pointwise
     # as the current implementation of associative_scan lowering
     # does not support lifted arguments
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
-        lambda params: (params["combine_mode"] == "pointwise"),
+        lambda params: (
+            params["combine_mode"] == "pointwise"
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
+        ),
     )
     def test_associative_scan_freevars_fct(
         self, compile_mode, combine_mode, reverse, device
@@ -4045,32 +4115,21 @@ class AssociativeScanTests(TestCase):
     @unittest.skipIf(not SM70OrLater, "triton")
     @unittest.skipIf(not torch.cuda.is_available(), "Test requires CUDA.")
     @parametrize("compile_mode", ["none", "eager", "compile", "compile_dynamic_shape"])
-    @parametrize("combine_mode", ["pointwise", "generic"])
     @parametrize("reverse", [False, True])
-    @parametrize("device", [torch.device("cpu"), torch.device("cuda")])
-    # Skipping the combine_mode=pointwise
-    # as the current implementation of associative_scan lowering
-    # does not support lifted arguments
-    @decorateIf(
-        unittest.skip,
-        lambda params: (params["combine_mode"] == "pointwise"),
-    )
-    def test_associative_scan_freevars_shape_check(
-        self, compile_mode, combine_mode, reverse, device
-    ):
-        H = torch.eye(2, device=device, requires_grad=True)
+    def test_associative_scan_freevars_shape_check(self, compile_mode, reverse):
+        H = torch.eye(2, device=torch.device("cuda"), requires_grad=True)
 
         def fct_freevars(x: torch.Tensor, y: torch.Tensor):
             return x @ H + y
 
-        inp = torch.randn(2, 2, 3, device=device, requires_grad=True)
+        inp = torch.randn(2, 2, 3, device=torch.device("cuda"), requires_grad=True)
 
         kwargs = {
             "dim": 2,
             "reverse": reverse,
             "compile_mode": compile_mode,
             "combine_fn": fct_freevars,
-            "combine_mode": combine_mode,
+            "combine_mode": "generic",
         }
         kwargs_fake = self._prepare_fake_kwargs(kwargs)
         self._run_test(
@@ -4088,9 +4147,18 @@ class AssociativeScanTests(TestCase):
     # Skipping the combine_mode=pointwise
     # as the current implementation of associative_scan lowering
     # does not support lifted arguments
+    # Skipping also combine_mode=pointwise and compile_mode=compile_dynamic_shape
+    # because lifted arguments are not yet supported in inductor
     @decorateIf(
         unittest.skip,
-        lambda params: (params["combine_mode"] == "pointwise"),
+        lambda params: (
+            params["combine_mode"] == "pointwise"
+            and (
+                params["device"] == torch.device("cpu")
+                or torch.version.hip
+                or params["compile_mode"] in ["compile", "compile_dynamic_shape"]
+            )
+        ),
     )
     def test_associative_scan_freevars_pytree(
         self, compile_mode, combine_mode, reverse, device
