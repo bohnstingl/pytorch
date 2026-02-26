@@ -1147,6 +1147,11 @@ def _get_sfdp_patterns():
 
 
 @functools.cache
-def _sfdp_init():
+def _sfdp_init(get_decomp_fn=None):
     for key, register_replacement_kwargs in _get_sfdp_patterns():
+        if get_decomp_fn is not None:
+            register_replacement_kwargs = {
+                **register_replacement_kwargs,
+                'get_decomp_fn': get_decomp_fn,
+            }
         gen_register_replacement(key, **register_replacement_kwargs)

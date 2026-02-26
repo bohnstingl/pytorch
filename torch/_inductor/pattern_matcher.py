@@ -1429,6 +1429,7 @@ def register_replacement(
     exclusive_arg_names: Sequence[str] = (),
     search_fn_pattern: Union[PatternExpr, None] = None,
     skip_duplicates: bool = False,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> bool:
     """
     Create a replacement rule based on example functions that get traced
@@ -1442,6 +1443,7 @@ def register_replacement(
         trace_fn: fwd_only or joint_fwd_bwd
         pass_dict: dict of passes to register to
         extra_check: additional check to run on match(using real shapes)
+        get_decomp_fn: optional function that returns decomposition table to use
     """
     argnames_static = [*inspect.signature(search_fn).parameters.keys()]
 
@@ -1514,7 +1516,7 @@ def register_replacement(
 
                     try:
                         # pyrefly: ignore [bad-argument-type]
-                        specific_graph = trace_fn(search_fn_new, sym_args + args)
+                        specific_graph = trace_fn(search_fn_new, sym_args + args, get_decomp_fn=get_decomp_fn)
                     except RuntimeError as e:
                         log_trace_failure(search_fn, e)
                         return False
@@ -1540,7 +1542,7 @@ def register_replacement(
                     argnames = sym_arg_names + argnames
                 else:
                     try:
-                        specific_graph = trace_fn(search_fn, args)
+                        specific_graph = trace_fn(search_fn, args, get_decomp_fn=get_decomp_fn)
                     except RuntimeError as e:
                         log_trace_failure(search_fn, e)
                         return False
@@ -1567,7 +1569,7 @@ def register_replacement(
 
             if is_match(specific_pattern_match) and extra_check(specific_pattern_match):
                 # trace the pattern using the shapes from the user program
-                match.replacement_graph = trace_fn(replace_fn, args)
+                match.replacement_graph = trace_fn(replace_fn, args, get_decomp_fn=get_decomp_fn)
                 if len(match.nodes) == 1:
                     for n in match.replacement_graph.graph.nodes:
                         _transfer_meta(
@@ -1741,6 +1743,7 @@ def gen_register_replacement(
     scalar_workaround: Union[dict[str, Union[float, int]], None] = None,
     exclusive_arg_names: Sequence[str] = (),
     skip_duplicates: bool = False,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> None:
     # Make sure the example_inputs is materialized.
     example_inputs = tuple(example_inputs)
@@ -1783,6 +1786,7 @@ def gen_register_replacement(
         exclusive_arg_names,
         search_fn_pattern=pat,
         skip_duplicates=skip_duplicates,
+        get_decomp_fn=get_decomp_fn,
     )
 
 

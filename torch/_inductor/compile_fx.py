@@ -526,7 +526,9 @@ def _recursive_pre_grad_passes(
 
 
 def _recursive_joint_graph_passes(
-    gm: GraphModule, skip_invoke_subgraph: bool = False
+    gm: GraphModule,
+    skip_invoke_subgraph: bool = False,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> None:
     with dynamo_timed(
         "_recursive_joint_graph_passes",
@@ -544,8 +546,8 @@ def _recursive_joint_graph_passes(
         # skip_invoke_subgraph.
         for subgraph_name in _get_subgraph_names(gm, skip_invoke_subgraph):
             subgraph = getattr(gm, subgraph_name)
-            _recursive_joint_graph_passes(subgraph, skip_invoke_subgraph)
-        joint_graph_passes(gm)
+            _recursive_joint_graph_passes(subgraph, skip_invoke_subgraph, get_decomp_fn=get_decomp_fn)
+        joint_graph_passes(gm, get_decomp_fn=get_decomp_fn)
 
 
 def _recursive_post_grad_passes(gm: GraphModule, is_inference: bool = False) -> None:
@@ -2256,6 +2258,7 @@ def compile_fx_forward(
     compiler_config_extra: CompilerConfigExtra,
     inner_compile: Callable[..., OutputCode] = compile_fx_inner,
     is_inference: bool = False,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> OutputCode:
     """
     Compile the forward graph of the given graph module.
@@ -2268,6 +2271,7 @@ def compile_fx_forward(
         compiler_config_extra: Extra configuration for the compiler.
         inner_compile: The inner compile function to use.
         is_inference: Whether this is an inference graph.
+        get_decomp_fn: Optional function that returns decomposition table to use.
     """
 
     if is_inference:
@@ -2283,7 +2287,7 @@ def compile_fx_forward(
             ),
         )
 
-        _recursive_joint_graph_passes(gm)
+        _recursive_joint_graph_passes(gm, get_decomp_fn=get_decomp_fn)
 
         trace_structured(
             "artifact",
@@ -2665,6 +2669,10 @@ def _compile_fx_main(
             decompositions if decompositions is not None else select_decomp_table()
         )
 
+        # Create a get_decomp_fn that returns the custom decompositions
+        def get_decomp_fn():
+            return decompositions
+
         def fw_compiler_base(
             gm: GraphModule,
             example_inputs: Sequence[InputType],
@@ -2683,6 +2691,7 @@ def _compile_fx_main(
                     compiler_config_extra=compiler_config_extra,
                     inner_compile=inner_compile,
                     is_inference=is_inference,
+                    get_decomp_fn=get_decomp_fn,
                 )
 
         fw_compiler: Callable[[GraphModule, Sequence[InputType]], OutputCode] = (

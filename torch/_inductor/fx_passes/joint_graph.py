@@ -5,8 +5,8 @@ import logging
 import operator
 import typing
 from collections import Counter
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Callable, Sequence
+from typing import Any, Optional
 
 import torch
 import torch._guards
@@ -55,13 +55,13 @@ pass_patterns = [
 
 
 @init_once_fakemode
-def lazy_init():
+def lazy_init(get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None):
     from .fuse_attention import _sfdp_init
     from .misc_patterns import _misc_patterns_init
     from .pad_mm import _pad_mm_init
 
     _pad_mm_init()
-    _sfdp_init()
+    _sfdp_init(get_decomp_fn=get_decomp_fn)
     _misc_patterns_init()
 
 
@@ -564,7 +564,10 @@ def canonicalize_aten_ir_passes(gm: torch.fx.GraphModule):
     canonicalize_quant_mapping(gm)
 
 
-def joint_graph_passes(graph: torch.fx.GraphModule):
+def joint_graph_passes(
+    graph: torch.fx.GraphModule,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
+):
     """
     Run FX transformations on the joint forwards+backwards graph.
     """
@@ -573,7 +576,7 @@ def joint_graph_passes(graph: torch.fx.GraphModule):
         subsystem="joint_graph_passes",
     )
 
-    lazy_init()
+    lazy_init(get_decomp_fn=get_decomp_fn)
     count = 0
 
     # must occur before other passes

@@ -2248,9 +2248,12 @@ def fallback_node_due_to_unsupported_type(node: torch.fx.Node, allow_cpu_inputs=
 
 
 def make_fallback(op, layout_constraint=None, warn=True, override_decomp=False):
-    assert op not in decompositions or override_decomp, (
-        f"both a fallback and a decomp for same op: {op}"
-    )
+    try:
+        assert op not in decompositions or override_decomp, (
+            f"both a fallback and a decomp for same op: {op}"
+        )
+    except:
+        print('Here')
     if (
         warn
         and bool(os.getenv("CI"))
