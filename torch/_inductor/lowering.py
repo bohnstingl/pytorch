@@ -58,7 +58,7 @@ from torch.utils._sympy.functions import (
 
 from .._dynamo.utils import import_submodule
 from . import config, inductor_prims, ir, test_operators  # NOQA: F401
-from .decomposition import decompositions, get_decompositions
+from .decomposition import get_decompositions, select_decomp_table
 from .ir import (
     BaseView,
     DtypeView,
@@ -2249,7 +2249,7 @@ def fallback_node_due_to_unsupported_type(node: torch.fx.Node, allow_cpu_inputs=
 
 def make_fallback(op, layout_constraint=None, warn=True, override_decomp=False):
     try:
-        assert op not in decompositions or override_decomp, (
+        assert op not in select_decomp_table() or override_decomp, (
             f"both a fallback and a decomp for same op: {op}"
         )
     except:

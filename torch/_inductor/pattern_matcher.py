@@ -2204,7 +2204,12 @@ def fwd_only(
 
 
 @torch.enable_grad()
-def joint_fwd_bwd(fn: Callable[..., Any], args: Sequence[Any]) -> torch.fx.GraphModule:
+def joint_fwd_bwd(
+    fn: Callable[..., Any],
+    args: Sequence[Any],
+    *,
+    get_decomp_fn: Optional[Callable[..., Any]] = None,
+) -> torch.fx.GraphModule:
     """Build a normalized training graph, for use with fx_to_pattern"""
     gm: Optional[torch.fx.GraphModule] = None
 
@@ -2221,7 +2226,7 @@ def joint_fwd_bwd(fn: Callable[..., Any], args: Sequence[Any]) -> torch.fx.Graph
             fn,
             lambda g, i: make_boxed_func(g),
             partition_fn=record_joint_graph,
-            decompositions=select_decomp_table(),
+            decompositions=get_decomp_fn() if get_decomp_fn is not None else select_decomp_table(),
             keep_inference_input_mutations=True,
             enable_log=False,
         )(*args)
@@ -2295,16 +2300,21 @@ def stable_topological_sort(graph: torch.fx.Graph) -> None:
     assert not waiting and len(ready) == len(graph.nodes)
 
 
-def init_once_fakemode(fn: Callable[..., Any]) -> Callable[[], Any]:
+def init_once_fakemode(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrapper around lazy init functions in fx_passes/"""
+
+    _accepts_get_decomp_fn = "get_decomp_fn" in inspect.signature(fn).parameters
 
     @functools.cache
     @functools.wraps(fn)
-    def lazy_init() -> Any:
+    def lazy_init(
+        get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
+    ) -> Any:
         counters_ref = counters[backend].copy()
 
         with torch._guards.tracing(None), unset_fake_temporarily(), FakeTensorMode():
-            result = fn()
+            kwargs = {"get_decomp_fn": get_decomp_fn} if _accepts_get_decomp_fn else {}
+            result = fn(**kwargs)
 
         # clear view matches encountered during tracing
         counters[backend] = counters_ref
