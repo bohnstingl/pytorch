@@ -2754,67 +2754,6 @@ def disable_proxy_modes_tracing() -> Generator[ProxyTorchDispatchMode, None, Non
     return _disable_infra_mode(torch._C._TorchDispatchModeKey.PROXY)
 
 
-def _get_dispatch_key_for_device(device: torch.device) -> Optional[torch._C.DispatchKey]:
-    """
-    Map device type to its corresponding DispatchKey.
-    Returns None if the device doesn't have a custom backend DispatchKey.
-    """
-    device_type = device.type if isinstance(device, torch.device) else str(device)
-    
-    # Map common device types to their DispatchKeys
-    dispatch_key_map = {
-        "privateuseone": torch._C.DispatchKey.PrivateUse1,
-        "cuda": torch._C.DispatchKey.CUDA,
-        "cpu": torch._C.DispatchKey.CPU,
-        "xpu": torch._C.DispatchKey.XPU,
-        "mps": torch._C.DispatchKey.MPS,
-        "meta": torch._C.DispatchKey.Meta,
-    }
-    
-    return dispatch_key_map.get(device_type)
-
-
-def _should_skip_decomposition_for_backend(
-    op: OpOverload,
-    args: tuple[object, ...],
-) -> bool:
-    """
-    Check if the operation has a backend-specific kernel implementation.
-    If a backend has registered a kernel for this op, we should skip decomposition
-    and let the backend handle it directly.
-    
-    This ensures that custom backend implementations (e.g., via DispatchKey.PrivateUse1)
-    take precedence over decompositions.
-    """
-    # Find the first tensor argument to determine the device
-    device = None
-    for arg in args:
-        if isinstance(arg, torch.Tensor):
-            device = arg.device
-            break
-    
-    if device is None:
-        # No tensor arguments, can't determine backend
-        return False
-    
-    dispatch_key = _get_dispatch_key_for_device(device)
-    if dispatch_key is None:
-        # Device doesn't have a custom backend DispatchKey
-        return False
-    
-    # Check if the backend has a kernel for this operation
-    # Use op.name() to get the qualified name (e.g., "aten::add.Tensor")
-    try:
-        has_kernel = torch._C._dispatch_has_kernel_for_dispatch_key(
-            op.name(),  # Qualified name like "aten::add.Tensor"
-            dispatch_key
-        )
-        return has_kernel
-    except Exception:
-        # If we can't determine, be conservative and allow decomposition
-        return False
-
-
 def maybe_handle_decomp(
     proxy_mode: ProxyTorchDispatchMode,
     op: OpOverload,
@@ -2822,11 +2761,6 @@ def maybe_handle_decomp(
     kwargs: dict[str, object],
 ) -> object:
     from torch._inductor.compiler_bisector import CompilerBisector
-
-    # IMPORTANT: Check if backend has a kernel BEFORE checking decomposition table
-    # This ensures custom backend implementations (e.g., PrivateUse1) take precedence
-    if _should_skip_decomposition_for_backend(op, args):
-        return NotImplemented
 
     if op in CURRENT_DECOMPOSITION_TABLE:
         if CompilerBisector.disable_subsystem(

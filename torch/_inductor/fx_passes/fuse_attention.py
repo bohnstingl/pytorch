@@ -1149,10 +1149,15 @@ def _get_sfdp_patterns():
 @functools.cache
 def _sfdp_init(get_decomp_fn=None):
     for key, register_replacement_kwargs in _get_sfdp_patterns():
-        if get_decomp_fn is not None:
-            register_replacement_kwargs = {
-                **register_replacement_kwargs,
-                'get_decomp_fn': get_decomp_fn,
-                'skip_duplicates': True,
-            }
+        # skip_duplicates=True is always needed: _sfdp_init is cached per unique
+        # get_decomp_fn, so if two compilations use different get_decomp_fn values
+        # (e.g. one custom-decomps, one default) both will run _sfdp_init and
+        # attempt to register the same SFDP patterns.  Whichever runs second must
+        # skip gracefully.  We merge via dict spread so we don't conflict with any
+        # skip_duplicates already present in register_replacement_kwargs.
+        register_replacement_kwargs = {
+            **register_replacement_kwargs,
+            'skip_duplicates': True,
+            **({"get_decomp_fn": get_decomp_fn} if get_decomp_fn is not None else {}),
+        }
         gen_register_replacement(key, **register_replacement_kwargs)
