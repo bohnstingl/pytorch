@@ -2271,7 +2271,18 @@ def compile_fx_forward(
         compiler_config_extra: Extra configuration for the compiler.
         inner_compile: The inner compile function to use.
         is_inference: Whether this is an inference graph.
-        get_decomp_fn: Optional function that returns decomposition table to use.
+        get_decomp_fn: Optional function that returns decomposition table to use for
+            joint-graph pattern matching (SFDP etc.).
+
+    Note — training path limitation:
+        ``get_decomp_fn`` is only forwarded to ``_recursive_joint_graph_passes`` on the
+        **inference** branch (``is_inference=True``).  For training, joint-graph passes are
+        invoked by AOT Autograd's partition function, which calls
+        ``_recursive_joint_graph_passes`` without ``get_decomp_fn``, so SFDP and other
+        pattern-matching passes trace patterns using ``select_decomp_table()`` rather than
+        the custom table.  The custom ``decompositions`` IS correctly threaded to
+        ``aot_autograd`` (for ``make_fx`` tracing), so the forward pass itself is traced
+        with the right decompositions; only the joint-graph pattern matching is affected.
     """
 
     if is_inference:
@@ -2465,6 +2476,7 @@ def compile_fx(
     config_patches: Optional[dict[str, Any]] = None,
     decompositions: Optional[dict[OpOverload, Callable[..., Any]]] = None,
     ignore_shape_env: bool = False,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> CompileFxOutput:
     """
     Main entry point for compiling given FX graph.  Despite the fact that this
@@ -2476,6 +2488,16 @@ def compile_fx(
 
     NB: This function TAKES OWNERSHIP of the input ``model_`` and can potentially
     mutate it!  Make a copy if you need to preserve the original GraphModule.
+
+    Args:
+        get_decomp_fn: Optional stable callable that returns the decomposition table
+            to use for joint-graph pattern matching (SFDP etc.).  When provided, it
+            is used as-is instead of creating a new lambda closure per call, which
+            ensures ``functools.cache`` in ``lazy_init`` / ``_sfdp_init`` keys on a
+            single stable identity across compilations.  ``decompositions`` is still
+            used for AOT Autograd tracing; ``get_decomp_fn`` only affects pattern
+            registration.  If ``None`` and ``decompositions`` is provided, a lambda
+            closure is created (legacy behaviour; not cache-stable).
     """
     # Some arguments trigger a recursive call to compile_fx.  Handle these
     # short circuits first, before anything else
@@ -2494,6 +2516,7 @@ def compile_fx(
                 inner_compile=config.patch(config_patches)(inner_compile),
                 decompositions=decompositions,
                 ignore_shape_env=ignore_shape_env,
+                get_decomp_fn=get_decomp_fn,
             )
 
     # Wake up the AsyncCompile subproc pool as early as possible (if there's cuda).
@@ -2536,6 +2559,7 @@ def compile_fx(
                     ),
                     decompositions=decompositions,
                     ignore_shape_env=ignore_shape_env,
+                    get_decomp_fn=get_decomp_fn,
                 )
 
     return _maybe_wrap_and_compile_fx_main(
@@ -2544,6 +2568,7 @@ def compile_fx(
         inner_compile,
         decompositions,
         ignore_shape_env,
+        get_decomp_fn=get_decomp_fn,
     )
 
 
@@ -2584,6 +2609,7 @@ def _maybe_wrap_and_compile_fx_main(
     inner_compile: Callable[..., OutputCode],
     decompositions: Optional[dict[OpOverload, Callable[..., Any]]],
     ignore_shape_env: bool,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> CompileFxOutput:
     """
     Part of compile_fx, called after patching configs.
@@ -2599,6 +2625,7 @@ def _maybe_wrap_and_compile_fx_main(
         inner_compile=inner_compile,
         decompositions=decompositions,
         ignore_shape_env=ignore_shape_env,
+        get_decomp_fn=get_decomp_fn,
     )
     if not graph_returns_tuple(model_):
         return make_graph_return_tuple(model_, example_inputs_, compile_gm)
@@ -2621,6 +2648,7 @@ def _maybe_wrap_and_compile_fx_main(
         inner_compile,
         decompositions,
         ignore_shape_env,
+        get_decomp_fn=get_decomp_fn,
     )
 
 
@@ -2630,6 +2658,7 @@ def _compile_fx_main(
     inner_compile: Callable[..., OutputCode],
     decompositions: Optional[dict[OpOverload, Callable[..., Any]]],
     ignore_shape_env: bool,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> CompileFxOutput:
     """
     Main part of compile_fx, called after wrapping is done.
@@ -2671,16 +2700,21 @@ def _compile_fx_main(
         # table and leave get_decomp_fn as None so that lazy_init() caches under
         # a single stable key (None) instead of creating a fresh function object
         # per compile_fx() call, which would defeat functools.cache.
-        _user_provided_decompositions = decompositions is not None
+        _user_provided_decompositions = decompositions is not None or get_decomp_fn is not None
         decompositions = (
             decompositions if decompositions is not None else select_decomp_table()
         )
 
-        # Create a get_decomp_fn that returns the custom decompositions
-        def get_decomp_fn():
-            return decompositions
+        if get_decomp_fn is None and _user_provided_decompositions:
+            # No stable callable supplied: create a lambda as before.  Note that a
+            # new closure is created per compile_fx call, which means lazy_init /
+            # _sfdp_init will see a fresh cache key every time.  Callers that
+            # compile repeatedly (e.g. custom backends) should supply a stable
+            # get_decomp_fn instead.
+            _decomps_ref = decompositions
 
-        get_decomp_fn = get_decomp_fn if _user_provided_decompositions else None
+            def get_decomp_fn() -> dict[Any, Callable[..., Any]]:
+                return _decomps_ref
 
         def fw_compiler_base(
             gm: GraphModule,
