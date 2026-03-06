@@ -2665,6 +2665,13 @@ def _compile_fx_main(
 
         compiler_config_extra = create_compiler_config_extra(config)
 
+        # Track whether the caller explicitly provided a custom decomposition table.
+        # Only in that case do we thread get_decomp_fn through the compilation
+        # pipeline. When decompositions is None we fall back to the global default
+        # table and leave get_decomp_fn as None so that lazy_init() caches under
+        # a single stable key (None) instead of creating a fresh function object
+        # per compile_fx() call, which would defeat functools.cache.
+        _user_provided_decompositions = decompositions is not None
         decompositions = (
             decompositions if decompositions is not None else select_decomp_table()
         )
@@ -2672,6 +2679,8 @@ def _compile_fx_main(
         # Create a get_decomp_fn that returns the custom decompositions
         def get_decomp_fn():
             return decompositions
+
+        get_decomp_fn = get_decomp_fn if _user_provided_decompositions else None
 
         def fw_compiler_base(
             gm: GraphModule,

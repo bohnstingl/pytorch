@@ -1153,5 +1153,6 @@ def _sfdp_init(get_decomp_fn=None):
             register_replacement_kwargs = {
                 **register_replacement_kwargs,
                 'get_decomp_fn': get_decomp_fn,
+                'skip_duplicates': True,
             }
         gen_register_replacement(key, **register_replacement_kwargs)
