@@ -1152,9 +1152,7 @@ def _sfdp_init(get_decomp_fn=None):
         # skip_duplicates=True: _sfdp_init is cached per get_decomp_fn, so two
         # compilations with different get_decomp_fn values both register the same
         # SFDP patterns; the second call must skip gracefully.
-        register_replacement_kwargs = {
-            **register_replacement_kwargs,
-            "skip_duplicates": True,
-            **({"get_decomp_fn": get_decomp_fn} if get_decomp_fn is not None else {}),
-        }
+        register_replacement_kwargs["skip_duplicates"] = True
+        if get_decomp_fn is not None:
+            register_replacement_kwargs["get_decomp_fn"] = get_decomp_fn
         gen_register_replacement(key, **register_replacement_kwargs)

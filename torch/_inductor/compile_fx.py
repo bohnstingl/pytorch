@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from inspect import currentframe
 from itertools import count
 from operator import attrgetter
-from typing import Any, Optional, TYPE_CHECKING, TypeVar, Union
+from typing import Any, Optional, TYPE_CHECKING, TypeVar
 from typing_extensions import Never, override, ParamSpec, Protocol, TypedDict, Unpack
 from unittest import mock
 
@@ -543,7 +543,9 @@ def _recursive_joint_graph_passes(
         # skip_invoke_subgraph.
         for subgraph_name in _get_subgraph_names(gm, skip_invoke_subgraph):
             subgraph = getattr(gm, subgraph_name)
-            _recursive_joint_graph_passes(subgraph, skip_invoke_subgraph, get_decomp_fn=get_decomp_fn)
+            _recursive_joint_graph_passes(
+                subgraph, skip_invoke_subgraph, get_decomp_fn=get_decomp_fn
+            )
         joint_graph_passes(gm, get_decomp_fn=get_decomp_fn)
 
 
@@ -2667,7 +2669,9 @@ def _compile_fx_main(
         # Only thread get_decomp_fn when the caller explicitly provided decompositions,
         # so that lazy_init() / _sfdp_init() cache under a stable None key for the
         # common case (no custom decompositions) instead of a fresh lambda every call.
-        _user_provided_decompositions = decompositions is not None or get_decomp_fn is not None
+        _user_provided_decompositions = (
+            decompositions is not None or get_decomp_fn is not None
+        )
         decompositions = (
             decompositions if decompositions is not None else select_decomp_table()
         )
@@ -2769,7 +2773,7 @@ def _compile_fx_main(
                 # preserve the original module params/buffers. Once AOTI switches
                 # to ep.run_decompositions() flow to lower to post-autograd opset
                 # this will go away.
-                for node in gm.graph.nodes:
+                for node in gm.graph.nodes:  # pyrefly: ignore [missing-attribute]
                     if node.op == "get_attr" and "val" not in node.meta:
                         target = attrgetter(node.target)(gm)
                         if isinstance(target, torch.Tensor):
@@ -2788,6 +2792,7 @@ def _compile_fx_main(
                         elif isinstance(target, FakeScriptObject):
                             node.meta["val"] = target
 
+            assert isinstance(gm, GraphModule)
             unlifted_gm = _unlift_graph(model_, gm, graph_signature)
             if "dynamo_flat_name_to_original_fqn" in model_.meta:
                 unlifted_gm.meta["dynamo_flat_name_to_original_fqn"] = model_.meta[
