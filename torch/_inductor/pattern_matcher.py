@@ -2307,8 +2307,8 @@ def init_once_fakemode(fn: Callable[..., Any]) -> Callable[..., Any]:
     @functools.cache
     @functools.wraps(fn)
     def lazy_init(
-        input_device: Optional[Any] = None,
-        get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
+        input_device: Any | None = None,
+        get_decomp_fn: Callable[..., dict[Any, Callable[..., Any]]] | None = None,
     ) -> Any:
         counters_ref = counters[backend].copy()
 
