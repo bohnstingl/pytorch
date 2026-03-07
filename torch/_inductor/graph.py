@@ -1308,7 +1308,7 @@ class GraphLowering(torch.fx.Interpreter):
             )
             base_name = target.name().split(".")[0]
             if base_name in FALLBACK_ALLOW_LIST:
-                make_fallback(target, warn=False, override_decomp=True)
+                make_fallback(target, warn=False)
             elif config.implicit_fallbacks:
                 error = (
                     MissingOperatorWithDecomp

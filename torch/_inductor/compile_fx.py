@@ -1597,11 +1597,9 @@ class _InProcessFxCompile(FxCompile):
                     # Collect and dump collective-op schedule for external diagnostics
                     torch._inductor.debug.log_collective_schedule(graph.scheduler.nodes)
 
-                    # When graph_partition is enabled, skip this check - partitioning handles dynamic shapes
                     if (
                         cudagraphs
                         and config.triton.cudagraph_skip_dynamic_graphs
-                        and not config.graph_partition
                         and not V.graph.disable_cudagraphs_reason
                         and torch._inductor.utils.any_is_symbolic(*example_inputs)
                     ):
@@ -1626,14 +1624,7 @@ class _InProcessFxCompile(FxCompile):
                         V.graph.disable_cudagraphs_reason = disable
 
                     # pyrefly: ignore [unbound-name]
-                    # When graph_partition is enabled, skip this check - partitioning handles incompatible ops
-                    if (
-                        cudagraphs
-                        # pyrefly: ignore [unbound-name]
-                        and not config.graph_partition
-                        # pyrefly: ignore [unbound-name]
-                        and not V.graph.disable_cudagraphs_reason
-                    ):
+                    if cudagraphs and not V.graph.disable_cudagraphs_reason:
                         maybe_incompat_node = get_first_incompatible_cudagraph_node(gm)
                         if maybe_incompat_node:
                             disable = f"disabling cudagraphs due to incompatible op {maybe_incompat_node.target}"
@@ -2268,18 +2259,8 @@ def compile_fx_forward(
         compiler_config_extra: Extra configuration for the compiler.
         inner_compile: The inner compile function to use.
         is_inference: Whether this is an inference graph.
-        get_decomp_fn: Optional function that returns decomposition table to use for
-            joint-graph pattern matching (SFDP etc.).
-
-    Note — training path limitation:
-        ``get_decomp_fn`` is only forwarded to ``_recursive_joint_graph_passes`` on the
-        **inference** branch (``is_inference=True``).  For training, joint-graph passes are
-        invoked by AOT Autograd's partition function, which calls
-        ``_recursive_joint_graph_passes`` without ``get_decomp_fn``, so SFDP and other
-        pattern-matching passes trace patterns using ``select_decomp_table()`` rather than
-        the custom table.  The custom ``decompositions`` IS correctly threaded to
-        ``aot_autograd`` (for ``make_fx`` tracing), so the forward pass itself is traced
-        with the right decompositions; only the joint-graph pattern matching is affected.
+        get_decomp_fn: Optional callable returning the decomposition table to use for
+            joint-graph pattern matching (SFDP etc.).  Only used on the inference path.
     """
 
     if is_inference:
@@ -2486,15 +2467,6 @@ def compile_fx(
     NB: This function TAKES OWNERSHIP of the input ``model_`` and can potentially
     mutate it!  Make a copy if you need to preserve the original GraphModule.
 
-    Args:
-        get_decomp_fn: Optional stable callable that returns the decomposition table
-            to use for joint-graph pattern matching (SFDP etc.).  When provided, it
-            is used as-is instead of creating a new lambda closure per call, which
-            ensures ``functools.cache`` in ``lazy_init`` / ``_sfdp_init`` keys on a
-            single stable identity across compilations.  ``decompositions`` is still
-            used for AOT Autograd tracing; ``get_decomp_fn`` only affects pattern
-            registration.  If ``None`` and ``decompositions`` is provided, a lambda
-            closure is created (legacy behaviour; not cache-stable).
     """
     # Some arguments trigger a recursive call to compile_fx.  Handle these
     # short circuits first, before anything else
@@ -2692,23 +2664,15 @@ def _compile_fx_main(
 
         compiler_config_extra = create_compiler_config_extra(config)
 
-        # Track whether the caller explicitly provided a custom decomposition table.
-        # Only in that case do we thread get_decomp_fn through the compilation
-        # pipeline. When decompositions is None we fall back to the global default
-        # table and leave get_decomp_fn as None so that lazy_init() caches under
-        # a single stable key (None) instead of creating a fresh function object
-        # per compile_fx() call, which would defeat functools.cache.
+        # Only thread get_decomp_fn when the caller explicitly provided decompositions,
+        # so that lazy_init() / _sfdp_init() cache under a stable None key for the
+        # common case (no custom decompositions) instead of a fresh lambda every call.
         _user_provided_decompositions = decompositions is not None or get_decomp_fn is not None
         decompositions = (
             decompositions if decompositions is not None else select_decomp_table()
         )
 
         if get_decomp_fn is None and _user_provided_decompositions:
-            # No stable callable supplied: create a lambda as before.  Note that a
-            # new closure is created per compile_fx call, which means lazy_init /
-            # _sfdp_init will see a fresh cache key every time.  Callers that
-            # compile repeatedly (e.g. custom backends) should supply a stable
-            # get_decomp_fn instead.
             _decomps_ref = decompositions
 
             def get_decomp_fn() -> dict[Any, Callable[..., Any]]:
