@@ -1311,7 +1311,7 @@ class GraphLowering(torch.fx.Interpreter):
                     )
                     decided_constraint = tag_to_layout_constraint(default_tag)
 
-                make_fallback(target, layout_constraint=decided_constraint, override_decomp=True)
+                make_fallback(target, layout_constraint=decided_constraint)
 
             elif get_decompositions([target]):
                 # There isn't a good way to dynamically patch this in
