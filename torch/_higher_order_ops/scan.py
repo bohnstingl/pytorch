@@ -45,14 +45,29 @@ aten = torch._ops.ops.aten
 
 
 def wrap_combine_fn_flat(
-    *args, combine_fn, spec_init, spec_xs, num_init_leaves, num_inp_leaves
+    *args,
+    combine_fn,
+    spec_init,
+    spec_xs,
+    num_init_leaves,
+    num_inp_leaves,
+    spec_additional=None,
+    num_additional_leaves=0,
 ):
-    if len(args) != (num_init_leaves + num_inp_leaves):
+    expected = num_init_leaves + num_inp_leaves + num_additional_leaves
+    if len(args) != expected:
         raise AssertionError(
-            f"combine_fn received wrong number of arguments, expected {num_init_leaves + num_inp_leaves}, but got {len(args)}"
+            f"combine_fn received wrong number of arguments, expected {expected}, but got {len(args)}"
         )
     carry = pytree.tree_unflatten(args[:num_init_leaves], spec_init)
-    xs = pytree.tree_unflatten(args[num_init_leaves:], spec_xs)
+    xs = pytree.tree_unflatten(
+        args[num_init_leaves : num_init_leaves + num_inp_leaves], spec_xs
+    )
+    if num_additional_leaves > 0:
+        additional = pytree.tree_unflatten(
+            args[num_init_leaves + num_inp_leaves :], spec_additional
+        )
+        return combine_fn(carry, xs, additional)
     return combine_fn(carry, xs)
 
 
@@ -84,6 +99,7 @@ def scan(
     *,
     dim: int = 0,
     reverse: bool = False,
+    additional_inputs: pytree.PyTree = (),
 ) -> tuple[pytree.PyTree, pytree.PyTree]:
     r"""
     Performs an inclusive scan with a combine function.
@@ -95,12 +111,14 @@ def scan(
         https://pytorch.org/blog/pytorch-feature-classification-changes/#prototype
 
     Args:
-        combine_fn (Callable): A binary callable with type ``(Tensor, Tensor) -> (Tensor, Tensor)``,
-            or if xs is a pytree ``(pytree, pytree) -> (pytree, pytree)``.
-            The first input to ``combine_fn`` is the previous or initial scan carry
-            and the second input element to ``combine_fn`` is a slice of the input along dim.
-            The first output element of ``combine_fn`` is the next scan carry
-            and the second output  of ``combine_fn`` represents a slice of the output.
+        combine_fn (Callable): A callable with type ``(pytree, pytree) -> (pytree, pytree)``.
+            When ``additional_inputs`` is non-empty, the signature must be
+            ``(pytree, pytree, pytree) -> (pytree, pytree)`` where the third argument
+            receives the unflattened ``additional_inputs``.
+            The first input is the previous or initial scan carry and the second input is
+            a slice of ``xs`` along ``dim``.
+            The first output is the next scan carry and the second output is a slice of
+            the stacked result.
             This function must be pure, i.e., no lifted arguments are supported at the moment
             and may not have any side effects.
         init (torch.Tensor or pytree with tensor leaves): The initial scan carry, a tensor, or nested pytree of tensors.
@@ -111,6 +129,10 @@ def scan(
     Kwargs:
         dim (int): the dimension to scan over, default 0.
         reverse (bool): A boolean stating if the scan should be reversed with respect to ``dim``, default ``False``.
+        additional_inputs (pytree with tensor leaves): Optional pytree of tensors that are constant
+            across all scan iterations (e.g. model weight matrices). These are passed as the third
+            argument to ``combine_fn`` and are explicitly tracked by the autograd and compilation
+            machinery, enabling correct gradient computation and efficient reuse. Default: ``()``.
 
     Returns:
         final_carry (torch.Tensor or pytree with tensor leaves),
@@ -140,6 +162,17 @@ def scan(
         # returns torch.tensor([10.]), torch.tensor([[0], [1.], [3.], [6.], [10.]])
         last_carry, cumsum = scan(add, init=i0, xs=xs)
 
+    Example with additional_inputs (fixed model weights)::
+
+        def step(carry, x, params):
+            W, b = params
+            h = torch.tanh(x @ W + b + carry)
+            return h.clone(), h
+
+        h0 = torch.zeros(batch, hidden)
+        W = torch.randn(input_dim, hidden)
+        b = torch.randn(hidden)
+        last_h, all_h = scan(step, init=h0, xs=inputs, additional_inputs=(W, b))
 
     """
     # The reason we flatten init and xs before calling into dynamo is that
@@ -147,12 +180,13 @@ def scan(
     # and we also want to the input ordering matches the output ordering.
     leaves_init, spec_init = pytree.tree_flatten(init)
     leaves_xs_orig, spec_xs = pytree.tree_flatten(xs)
+    leaves_additional, spec_additional = pytree.tree_flatten(additional_inputs)
 
     # Shortcut if no xs is provided
     if len(leaves_xs_orig) == 0:
         return init, []
 
-    def _validate_input(cfn, lxs, linit, d, r):
+    def _validate_input(cfn, lxs, linit, ladditional, d, r):
         # Basic arguments check
         if not callable(cfn):
             raise RuntimeError(f"Combine_fn must be a callable, but got {cfn}")
@@ -181,10 +215,17 @@ def scan(
                 "All xs leaves must at least have 'dim' number of dimensions and scan dimension > 0"
             )
 
+        # Checks for additional_inputs
+        for x in ladditional:
+            if not isinstance(x, torch.Tensor):
+                raise RuntimeError(
+                    f"All additional_inputs leaves must be a Tensor but got {x}"
+                )
+
     ndim = leaves_xs_orig[0].ndim
     dim = utils.canonicalize_dim(ndim, dim)
 
-    _validate_input(combine_fn, leaves_xs_orig, leaves_init, dim, reverse)
+    _validate_input(combine_fn, leaves_xs_orig, leaves_init, leaves_additional, dim, reverse)
 
     # Move scan dim to 0 and always perform scan on dim 0
     leaves_xs = []
@@ -204,16 +245,21 @@ def scan(
         spec_xs=spec_xs,
         num_init_leaves=len(leaves_init),
         num_inp_leaves=len(leaves_xs),
+        spec_additional=spec_additional,
+        num_additional_leaves=len(leaves_additional),
     )
 
-    def run_flattened_scan(combine_fn, leaves_init, leaves_xs):
-        return scan_op(combine_fn, leaves_init, leaves_xs, additional_inputs=())
+    def run_flattened_scan(combine_fn, leaves_init, leaves_xs, leaves_additional):
+        return scan_op(
+            combine_fn, leaves_init, leaves_xs, additional_inputs=tuple(leaves_additional)
+        )
 
     carry, out = _maybe_compile_and_run_fn(
         run_flattened_scan,
         combine_fn,
         leaves_init,
         leaves_xs,
+        leaves_additional,
     )
 
     if reverse:
@@ -950,16 +996,26 @@ def scan_batch_rule(interpreter, combine_fn, init, xs, additional_inputs):
 
 
 # dense implementation for scan. Used for testing only.
-def _fake_scan(combine_fn, init, xs=None, dim=0, reverse=False):
+def _fake_scan(combine_fn, init, xs=None, dim=0, reverse=False, additional_inputs=()):
     carry_leaves, carry_spec = pytree.tree_flatten(init)
     inp_leaves, inp_spec = pytree.tree_flatten(xs)
+    additional_leaves, additional_spec = pytree.tree_flatten(additional_inputs)
     if xs is None or len(inp_leaves) == 0:
         return init, []
     result_flat = []
     carry = carry_leaves
     op = reversed if reverse else lambda x: x
 
-    dummy_carry, dummy_out = combine_fn(
+    def _call_combine_fn(carry_pytree, xs_pytree):
+        if additional_leaves:
+            return combine_fn(
+                carry_pytree,
+                xs_pytree,
+                pytree.tree_unflatten(additional_leaves, additional_spec),
+            )
+        return combine_fn(carry_pytree, xs_pytree)
+
+    dummy_carry, dummy_out = _call_combine_fn(
         pytree.tree_unflatten(carry, carry_spec),
         pytree.tree_unflatten(
             [first_slice_copy(elem, dim) for elem in inp_leaves],
@@ -970,11 +1026,11 @@ def _fake_scan(combine_fn, init, xs=None, dim=0, reverse=False):
     num_leaves = len(dummy_out_leaves)
 
     for ind in op(range(inp_leaves[0].size(dim))):
-        xs = [elem.select(dim, ind) for elem in inp_leaves]
+        xs_slice = [elem.select(dim, ind) for elem in inp_leaves]
 
-        carry, y = combine_fn(
+        carry, y = _call_combine_fn(
             pytree.tree_unflatten(carry, carry_spec),
-            pytree.tree_unflatten(xs, inp_spec),
+            pytree.tree_unflatten(xs_slice, inp_spec),
         )
         carry, _ = pytree.tree_flatten(carry)
         y, _ = pytree.tree_flatten(y)

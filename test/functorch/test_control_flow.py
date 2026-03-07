@@ -3410,6 +3410,80 @@ class GraphModule(torch.nn.Module):
             )
 
     @skipIfNoDynamoSupport
+    @parametrize("reverse", [False, True])
+    @parametrize("compile_mode", ["none", "eager"])
+    @parametrize("device", [torch.device("cpu")])
+    def test_scan_additional_inputs_basic(self, reverse, compile_mode, device):
+        """additional_inputs are passed as the 3rd argument to combine_fn."""
+        scan_fct = compile_mode_helper(scan, compile_mode)
+        W = torch.randn(5, 5, device=device)
+        b = torch.randn(5, device=device)
+        h0 = torch.zeros(5, device=device)
+        xs = torch.randn(4, 5, device=device)
+
+        def step(carry, x, params):
+            W_local, b_local = params
+            h = torch.tanh(carry + x @ W_local + b_local)
+            return h.clone(), h
+
+        result = scan_fct(step, h0, xs, reverse=reverse, additional_inputs=(W, b))
+        result_exp = _fake_scan(step, h0, xs, reverse=reverse, additional_inputs=(W, b))
+        self.assertEqual(result, result_exp)
+
+    @skipIfNoDynamoSupport
+    @parametrize("reverse", [False, True])
+    @parametrize("compile_mode", ["none", "eager"])
+    @parametrize("device", [torch.device("cpu")])
+    def test_scan_additional_inputs_autograd(self, reverse, compile_mode, device):
+        """Gradients flow correctly through additional_inputs."""
+        scan_fct = compile_mode_helper(scan, compile_mode)
+        W = torch.randn(5, 5, device=device, requires_grad=True)
+        b = torch.randn(5, device=device, requires_grad=True)
+        h0 = torch.zeros(5, device=device, requires_grad=True)
+        xs = torch.randn(4, 5, device=device, requires_grad=True)
+
+        def step(carry, x, params):
+            W_local, b_local = params
+            h = torch.tanh(carry + x @ W_local + b_local)
+            return h.clone(), h
+
+        result = scan_fct(step, h0, xs, reverse=reverse, additional_inputs=(W, b))
+        result_exp = _fake_scan(step, h0, xs, reverse=reverse, additional_inputs=(W, b))
+        self.assertEqual(result, result_exp)
+        self.check_autograd(result, result_exp, (h0, xs, W, b))
+
+    @skipIfNoDynamoSupport
+    @parametrize("device", [torch.device("cpu")])
+    def test_scan_additional_inputs_pytree(self, device):
+        """additional_inputs can be any pytree (dict, nested tuple, etc.)."""
+        W = torch.randn(5, 5, device=device)
+        b = torch.randn(5, device=device)
+        h0 = torch.zeros(5, device=device)
+        xs = torch.randn(4, 5, device=device)
+
+        def step_dict(carry, x, params):
+            h = torch.tanh(carry + x @ params["W"] + params["b"])
+            return h.clone(), h
+
+        params = {"W": W, "b": b}
+        result = scan(step_dict, h0, xs, additional_inputs=params)
+        result_exp = _fake_scan(step_dict, h0, xs, additional_inputs=params)
+        self.assertEqual(result, result_exp)
+
+    @skipIfNoDynamoSupport
+    def test_scan_additional_inputs_validation(self):
+        """Non-tensor leaves in additional_inputs raise a clear error."""
+        h0 = torch.zeros(4)
+        xs = torch.randn(3, 4)
+        W = torch.randn(4, 4)
+
+        def step(carry, x, params):
+            return carry + x, carry
+
+        with self.assertRaisesRegex(RuntimeError, "additional_inputs leaves must be a Tensor"):
+            scan(step, h0, xs, additional_inputs=(W, "not_a_tensor"))
+
+    @skipIfNoDynamoSupport
     def test_scan_simple_graph_wrong_dtype(self):
         def add_wrong_dtype(x: torch.Tensor, y: torch.Tensor):
             return torch.ones_like(x + y, dtype=torch.int64), x + y
