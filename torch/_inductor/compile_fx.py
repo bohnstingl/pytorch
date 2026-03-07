@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from inspect import currentframe
 from itertools import count
 from operator import attrgetter
-from typing import Any, TYPE_CHECKING, TypeVar
+from typing import Any, Optional, TYPE_CHECKING, TypeVar, Union
 from typing_extensions import Never, override, ParamSpec, Protocol, TypedDict, Unpack
 from unittest import mock
 
@@ -44,7 +44,6 @@ from torch._dynamo.utils import (
     detect_fake_mode,
     dynamo_timed,
     flatten_graph_inputs,
-    get_inputs_devices,
     get_metrics_context,
     lazy_format_graph_code,
     set_feature_use,
@@ -62,7 +61,6 @@ from torch._functorch.aot_autograd import (
 from torch._inductor.codecache import code_hash, FxGraphCache, output_code_log
 from torch._inductor.cudagraph_utils import (
     BoxedDeviceIndex,
-    cudagraphs_log,
     format_default_skip_message,
     log_cudagraph_skip_and_bump_counter,
     PlaceholderInfo,
@@ -314,7 +312,7 @@ def _step_logger() -> Callable[..., None]:
 def _warn_tf32_disabled() -> None:
     if (
         torch.cuda.is_available()
-        and torch.backends.cuda.matmul.fp32_precision != "tf32"
+        and not torch.backends.cuda.matmul.allow_tf32
         and torch.cuda.get_device_capability() >= (8, 0)
     ):
         warnings.warn(
@@ -527,22 +525,15 @@ def _recursive_pre_grad_passes(
 def _recursive_joint_graph_passes(
     gm: GraphModule,
     skip_invoke_subgraph: bool = False,
-    input_device: torch.device | None = None,
-) -> GraphModule:
-    def _run_on_sub_graph_module(subgraph_name: str) -> None:
-        subgraph = getattr(gm, subgraph_name)
-        new_subgraph = _recursive_joint_graph_passes(
-            subgraph, skip_invoke_subgraph, input_device
-        )
-        setattr(gm, subgraph_name, new_subgraph)
-
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
+) -> None:
     with dynamo_timed(
         "_recursive_joint_graph_passes",
         log_pt2_compile_event=True,
         dynamo_compile_column_us="joint_graph_pass_time_us",
     ):
         if not config.use_joint_graph_passes:
-            return gm
+            return
 
         # invoke_subgraph already runs the _recursive_joint_graph_passes.  In
         # AOTAutograd, `run_joint_graph_passes_on_hops` partitions the
@@ -550,20 +541,10 @@ def _recursive_joint_graph_passes(
         # AOTAutograd has access to partition_fn, which internally calls the
         # `_recursive_joint_graph_passes` for the subgraph. So, skip recursing
         # skip_invoke_subgraph.
-        old_subgraph_names = OrderedSet(_get_subgraph_names(gm, skip_invoke_subgraph))
-        for subgraph_name in old_subgraph_names:
-            _run_on_sub_graph_module(subgraph_name)
-
-        out_gm = joint_graph_passes(gm, input_device)
-
-        # Some joint graph passes may create new sub graph module. Run one round
-        # for the newly created graph modules.
-        # We should not skip graphs for invoke_subgraph HOPs for newly
-        # generated subgraphs.
-        for subgraph_name in _get_subgraph_names(out_gm, skip_invoke_subgraph=False):
-            if subgraph_name not in old_subgraph_names:
-                _run_on_sub_graph_module(subgraph_name)
-        return out_gm
+        for subgraph_name in _get_subgraph_names(gm, skip_invoke_subgraph):
+            subgraph = getattr(gm, subgraph_name)
+            _recursive_joint_graph_passes(subgraph, skip_invoke_subgraph, get_decomp_fn=get_decomp_fn)
+        joint_graph_passes(gm, get_decomp_fn=get_decomp_fn)
 
 
 def _recursive_post_grad_passes(gm: GraphModule, is_inference: bool = False) -> None:
@@ -842,24 +823,11 @@ def _compile_fx_inner(
     """
     aot_mode: bool = V.aot_compilation
 
-    from torch._inductor.autotune_process import use_pipelined_autotuning
-
-    if use_pipelined_autotuning():
-        # Warm up max-autotune process pool asap
-        from torch._inductor.autotune_process import AutotuneProcessPool
-
-        pool_instance = AutotuneProcessPool.get_instance()
-        pool_instance.warm_up()
-
     # Clean up Compiled Triton Kernels per inductor compile, as the future objects
     # may not be valid for use after they are run/autotuned
     torch._inductor.async_compile.CompiledTritonKernels.cache_clear()
 
-    if (
-        dynamo_utils.count_calls(gm.graph) == 0
-        and not aot_mode
-        and not torch._functorch.config.bundled_autograd_cache
-    ):
+    if dynamo_utils.count_calls(gm.graph) == 0 and not aot_mode:
         # trigger the real recompilation for _LazyGraphModule before returning
         # the forward method.
         from torch._dynamo.utils import CompileEventLogLevel
@@ -1098,7 +1066,7 @@ def _compile_fx_inner(
         )
         # Add event data about cache hits/miss
         # TODO: add remote cache get/put timings here too
-        CompileEventLogger.try_add_pt2_compile(
+        CompileEventLogger.pt2_compile(
             "inductor_compile",
             cache_state=cache_state,
             cache_event_time=start_time,
@@ -2074,10 +2042,7 @@ def fw_compiler_freezing(
     from torch._inductor.freezing import convert_conv_weights_to_channels_last, freeze
 
     # partition_fn won't be called
-    inputs_devices = get_inputs_devices(aot_example_inputs, aot_autograd_model)
-    aot_autograd_model = _recursive_joint_graph_passes(
-        aot_autograd_model, input_device=next(iter(inputs_devices))
-    )
+    _recursive_joint_graph_passes(aot_autograd_model)
 
     layout_opt = GraphLowering.decide_layout_opt(aot_autograd_model, is_inference=True)
     if layout_opt:
@@ -2213,10 +2178,7 @@ def partition_fn(
         # We can skip the invoke_subgraph because the
         # entire_partition_fn is called recursively for invoke_subgraph
         # in partitioning.
-        inputs_devices = get_inputs_devices(joint_inputs, gm)
-        gm = _recursive_joint_graph_passes(
-            gm, skip_invoke_subgraph=True, input_device=next(iter(inputs_devices))
-        )
+        _recursive_joint_graph_passes(gm, skip_invoke_subgraph=True)
 
     static_lifetime_input_indices: list[int] | None = kwargs.pop(  # type: ignore[assignment]
         "static_lifetime_input_indices", None
@@ -2255,61 +2217,19 @@ def get_num_model_outputs(model: GraphModule) -> int:
     return len(model_outputs)
 
 
-def cudagraph_annotation_context(
-    cudagraphs: BoxedBool,
-) -> contextlib.AbstractContextManager[None]:
-    # When an annotation force-enables cudagraphs but the global config has them
-    # off, patch config.triton.cudagraphs for the duration of compilation,
-    # so existing codepaths that access config.triton.cudagraphs work
-    if cudagraphs.value and not config.triton.cudagraphs:
-        return config.patch({"triton.cudagraphs": True})
-    return contextlib.nullcontext()
-
-
 @dataclass(frozen=True)
 class CompilerConfigExtra:
     cudagraphs: BoxedBool
     graph_id: int
     forward_device: BoxedDeviceIndex
-    cudagraphs_bwd_override: bool | None = None
 
 
-def create_compiler_config_extra(
-    config: types.ModuleType, gm_meta: dict[str, Any] | None = None
-) -> CompilerConfigExtra:
+def create_compiler_config_extra(config: types.ModuleType) -> CompilerConfigExtra:
     # Although cudagraphs may have been enabled via config, various
     # conditions (which are tested within the bowels of Inductor) may
     # force cudagraphs to be disabled.  This mutable box lets us retrieve
     # the final determination if cudagraphs actually can be used or not.
     cudagraphs = BoxedBool(config.triton.cudagraphs)
-
-    cudagraphs_bwd_override: bool | None = None
-
-    # Override cudagraphs BoxedBool based on override_cudagraphs annotation.
-    # Disabling fwd disables bwd (copying activations isn't profitable),
-    # so cudagraphs_bwd_override is only needed for fwd=True / bwd=False.
-    if (
-        gm_meta is not None
-        and (annotation := gm_meta.get("cudagraph_annotation")) is not None
-    ):
-        if annotation.fwd is not None and annotation.fwd != config.triton.cudagraphs:
-            cudagraphs = BoxedBool(annotation.fwd)
-            if annotation.fwd:
-                cudagraphs_log.info(
-                    "enabling cudagraphs due to override_cudagraphs annotation"
-                )
-            else:
-                log_cudagraph_skip_and_bump_counter(
-                    "disabling cudagraphs due to override_cudagraphs annotation"
-                )
-
-        # bwd override only matters when fwd enables cudagraphs but bwd
-        # explicitly disables them.
-        if cudagraphs.value and annotation.bwd is not None and not annotation.bwd:
-            cudagraphs_bwd_override = annotation.bwd
-            log_cudagraph_skip_and_bump_counter(
-                "disabling cudagraphs for backward due to override_cudagraphs annotation"
-            )
 
     # TODO: The modern style is to use CompileId from TracingContext to
     # identify Inductor compilation.  However, this CompileId cannot
@@ -2324,7 +2244,6 @@ def create_compiler_config_extra(
         cudagraphs=cudagraphs,
         graph_id=graph_id,
         forward_device=forward_device,
-        cudagraphs_bwd_override=cudagraphs_bwd_override,
     )
 
 
@@ -2336,6 +2255,7 @@ def compile_fx_forward(
     compiler_config_extra: CompilerConfigExtra,
     inner_compile: Callable[..., OutputCode] = compile_fx_inner,
     is_inference: bool = False,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> OutputCode:
     """
     Compile the forward graph of the given graph module.
@@ -2348,6 +2268,18 @@ def compile_fx_forward(
         compiler_config_extra: Extra configuration for the compiler.
         inner_compile: The inner compile function to use.
         is_inference: Whether this is an inference graph.
+        get_decomp_fn: Optional function that returns decomposition table to use for
+            joint-graph pattern matching (SFDP etc.).
+
+    Note — training path limitation:
+        ``get_decomp_fn`` is only forwarded to ``_recursive_joint_graph_passes`` on the
+        **inference** branch (``is_inference=True``).  For training, joint-graph passes are
+        invoked by AOT Autograd's partition function, which calls
+        ``_recursive_joint_graph_passes`` without ``get_decomp_fn``, so SFDP and other
+        pattern-matching passes trace patterns using ``select_decomp_table()`` rather than
+        the custom table.  The custom ``decompositions`` IS correctly threaded to
+        ``aot_autograd`` (for ``make_fx`` tracing), so the forward pass itself is traced
+        with the right decompositions; only the joint-graph pattern matching is affected.
     """
 
     if is_inference:
@@ -2363,8 +2295,7 @@ def compile_fx_forward(
             ),
         )
 
-        inputs_devices = get_inputs_devices(example_inputs, gm)
-        gm = _recursive_joint_graph_passes(gm, input_device=next(iter(inputs_devices)))
+        _recursive_joint_graph_passes(gm, get_decomp_fn=get_decomp_fn)
 
         trace_structured(
             "artifact",
@@ -2428,16 +2359,15 @@ def compile_fx_forward(
     # original strides
     _recursive_record_user_visible_output_idxs(gm)
 
-    with cudagraph_annotation_context(compiler_config_extra.cudagraphs):
-        return inner_compile(
-            gm,
-            example_inputs,
-            static_input_idxs=get_static_input_idxs(fixed),
-            cudagraphs=compiler_config_extra.cudagraphs,
-            graph_id=compiler_config_extra.graph_id,
-            is_inference=is_inference,
-            boxed_forward_device_index=compiler_config_extra.forward_device,
-        )
+    return inner_compile(
+        gm,
+        example_inputs,
+        static_input_idxs=get_static_input_idxs(fixed),
+        cudagraphs=compiler_config_extra.cudagraphs,
+        graph_id=compiler_config_extra.graph_id,
+        is_inference=is_inference,
+        boxed_forward_device_index=compiler_config_extra.forward_device,
+    )
 
 
 def compile_fx_backward(
@@ -2470,25 +2400,16 @@ def compile_fx_backward(
             model_outputs_node.meta["user_visible_output_idxs"] = []
 
         fixed = count_tangents(gm)
-
-        # Check if cudagraphs should be overridden for backward via annotation
-        cudagraphs = compiler_config_extra.cudagraphs
-        if compiler_config_extra.cudagraphs_bwd_override is not None:
-            cudagraphs = BoxedBool(compiler_config_extra.cudagraphs_bwd_override)
-
         with (
-            (
-                config.patch(get_cpp_wrapper_config())
-                if config.cpp_wrapper
-                else contextlib.nullcontext()
-            ),
-            cudagraph_annotation_context(cudagraphs),
+            config.patch(get_cpp_wrapper_config())
+            if config.cpp_wrapper
+            else contextlib.nullcontext()
         ):
             return inner_compile(
                 gm,
                 example_inputs,
                 static_input_idxs=list(range(fixed)),
-                cudagraphs=cudagraphs,
+                cudagraphs=compiler_config_extra.cudagraphs,
                 is_backward=True,
                 graph_id=compiler_config_extra.graph_id,
                 boxed_forward_device_index=compiler_config_extra.forward_device,
@@ -2552,6 +2473,7 @@ def compile_fx(
     config_patches: dict[str, Any] | None = None,
     decompositions: dict[OpOverload, Callable[..., Any]] | None = None,
     ignore_shape_env: bool = False,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> CompileFxOutput:
     """
     Main entry point for compiling given FX graph.  Despite the fact that this
@@ -2563,6 +2485,16 @@ def compile_fx(
 
     NB: This function TAKES OWNERSHIP of the input ``model_`` and can potentially
     mutate it!  Make a copy if you need to preserve the original GraphModule.
+
+    Args:
+        get_decomp_fn: Optional stable callable that returns the decomposition table
+            to use for joint-graph pattern matching (SFDP etc.).  When provided, it
+            is used as-is instead of creating a new lambda closure per call, which
+            ensures ``functools.cache`` in ``lazy_init`` / ``_sfdp_init`` keys on a
+            single stable identity across compilations.  ``decompositions`` is still
+            used for AOT Autograd tracing; ``get_decomp_fn`` only affects pattern
+            registration.  If ``None`` and ``decompositions`` is provided, a lambda
+            closure is created (legacy behaviour; not cache-stable).
     """
     # Some arguments trigger a recursive call to compile_fx.  Handle these
     # short circuits first, before anything else
@@ -2582,6 +2514,7 @@ def compile_fx(
                 inner_compile=config.patch(config_patches)(inner_compile),
                 decompositions=decompositions,
                 ignore_shape_env=ignore_shape_env,
+                get_decomp_fn=get_decomp_fn,
             )
 
     # Wake up the AsyncCompile subproc pool as early as possible (if there's cuda).
@@ -2624,6 +2557,7 @@ def compile_fx(
                     ),
                     decompositions=decompositions,
                     ignore_shape_env=ignore_shape_env,
+                    get_decomp_fn=get_decomp_fn,
                 )
 
     return _maybe_wrap_and_compile_fx_main(
@@ -2632,6 +2566,7 @@ def compile_fx(
         inner_compile,
         decompositions,
         ignore_shape_env,
+        get_decomp_fn=get_decomp_fn,
     )
 
 
@@ -2672,6 +2607,7 @@ def _maybe_wrap_and_compile_fx_main(
     inner_compile: Callable[..., OutputCode],
     decompositions: dict[OpOverload, Callable[..., Any]] | None,
     ignore_shape_env: bool,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> CompileFxOutput:
     """
     Part of compile_fx, called after patching configs.
@@ -2687,6 +2623,7 @@ def _maybe_wrap_and_compile_fx_main(
         inner_compile=inner_compile,
         decompositions=decompositions,
         ignore_shape_env=ignore_shape_env,
+        get_decomp_fn=get_decomp_fn,
     )
     if not graph_returns_tuple(model_):
         return make_graph_return_tuple(model_, example_inputs_, compile_gm)
@@ -2709,6 +2646,7 @@ def _maybe_wrap_and_compile_fx_main(
         inner_compile,
         decompositions,
         ignore_shape_env,
+        get_decomp_fn=get_decomp_fn,
     )
 
 
@@ -2718,6 +2656,7 @@ def _compile_fx_main(
     inner_compile: Callable[..., OutputCode],
     decompositions: dict[OpOverload, Callable[..., Any]] | None,
     ignore_shape_env: bool,
+    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> CompileFxOutput:
     """
     Main part of compile_fx, called after wrapping is done.
@@ -2751,12 +2690,29 @@ def _compile_fx_main(
 
         num_example_inputs = len(example_inputs_)
 
-        gm_meta = model_.meta if isinstance(model_, GraphModule) else None
-        compiler_config_extra = create_compiler_config_extra(config, gm_meta)
+        compiler_config_extra = create_compiler_config_extra(config)
 
+        # Track whether the caller explicitly provided a custom decomposition table.
+        # Only in that case do we thread get_decomp_fn through the compilation
+        # pipeline. When decompositions is None we fall back to the global default
+        # table and leave get_decomp_fn as None so that lazy_init() caches under
+        # a single stable key (None) instead of creating a fresh function object
+        # per compile_fx() call, which would defeat functools.cache.
+        _user_provided_decompositions = decompositions is not None or get_decomp_fn is not None
         decompositions = (
             decompositions if decompositions is not None else select_decomp_table()
         )
+
+        if get_decomp_fn is None and _user_provided_decompositions:
+            # No stable callable supplied: create a lambda as before.  Note that a
+            # new closure is created per compile_fx call, which means lazy_init /
+            # _sfdp_init will see a fresh cache key every time.  Callers that
+            # compile repeatedly (e.g. custom backends) should supply a stable
+            # get_decomp_fn instead.
+            _decomps_ref = decompositions
+
+            def get_decomp_fn() -> dict[Any, Callable[..., Any]]:
+                return _decomps_ref
 
         def fw_compiler_base(
             gm: GraphModule,
@@ -2776,6 +2732,7 @@ def _compile_fx_main(
                     compiler_config_extra=compiler_config_extra,
                     inner_compile=inner_compile,
                     is_inference=is_inference,
+                    get_decomp_fn=get_decomp_fn,
                 )
 
         fw_compiler: Callable[[GraphModule, Sequence[InputType]], OutputCode] = (
@@ -2838,7 +2795,7 @@ def _compile_fx_main(
                     trace_joint=False,
                     decompositions=decompositions,
                 )
-                assert isinstance(gm, GraphModule)
+
                 from torch._export.utils import _detect_fake_mode_from_gm
 
                 fake_mode = _detect_fake_mode_from_gm(gm)  # type: ignore[assignment]
