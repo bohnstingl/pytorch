@@ -995,7 +995,9 @@ class RepeatedExpr(PatternExpr):
             self.inner_pattern,
         )
         # Check all anchor nodes match the pattern
-        for anchor_node in self.inner_pattern.find_anchor_nodes(ctx, OrderedSet()):
+        for anchor_node in self.inner_pattern.find_anchor_nodes(
+            ctx, OrderedSet([node])
+        ):
             anchor_m = MatchContext([self], graph=node.graph).match(
                 self.inner_pattern, anchor_node
             )
@@ -1339,10 +1341,11 @@ class ReplacementPatternEntry(PatternEntry):
                 for user in old_uses:
                     idx = maybe_getitem(user)
                     if idx is None:
-                        raise AssertionError(
-                            "Deleted index from getitem, did you erase the index and not properly replace it?"
-                        )
-                    replace(user, new[idx])
+                        # Output is used directly
+                        # pyrefly: ignore [bad-argument-type]
+                        old.replace_all_uses_with(new)
+                    else:
+                        replace(user, new[idx])
                 graph.erase_node(old)
 
             if len(output_nodes) == len(replacement):
@@ -2303,17 +2306,23 @@ def stable_topological_sort(graph: torch.fx.Graph) -> None:
 def init_once_fakemode(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrapper around lazy init functions in fx_passes/"""
 
-    _accepts_get_decomp_fn = "get_decomp_fn" in inspect.signature(fn).parameters
+    _fn_params = inspect.signature(fn).parameters
 
     @functools.cache
     @functools.wraps(fn)
     def lazy_init(
+        input_device: Optional[Any] = None,
         get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
     ) -> Any:
         counters_ref = counters[backend].copy()
 
+        kwargs: dict[str, Any] = {}
+        if "input_device" in _fn_params:
+            kwargs["input_device"] = input_device
+        if "get_decomp_fn" in _fn_params:
+            kwargs["get_decomp_fn"] = get_decomp_fn
+
         with torch._guards.tracing(None), unset_fake_temporarily(), FakeTensorMode():
-            kwargs = {"get_decomp_fn": get_decomp_fn} if _accepts_get_decomp_fn else {}
             result = fn(**kwargs)
 
         # clear view matches encountered during tracing

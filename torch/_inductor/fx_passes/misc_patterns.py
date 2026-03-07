@@ -1,5 +1,6 @@
 # mypy: allow-untyped-defs
 import functools
+from typing import Optional
 
 import torch
 from torch._dynamo.utils import counters
@@ -13,13 +14,15 @@ aten = torch.ops.aten
 
 
 @functools.cache
-def _misc_patterns_init():
+def _misc_patterns_init(input_device: Optional[torch.device] = None):
     from .joint_graph import patterns as joint_graph_patterns
     from .post_grad import pass_patterns as post_grad_patterns_all
 
     post_grad_patterns = post_grad_patterns_all[1]  # medium priority
 
-    if torch.cuda.is_available():
+    if input_device:
+        device = str(input_device)
+    elif torch.cuda.is_available():
         # workaround https://github.com/pytorch/pytorch/issues/97894
         device = "cuda"
     else:

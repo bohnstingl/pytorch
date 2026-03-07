@@ -3,7 +3,7 @@ import itertools
 import operator
 import typing
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Optional
 
 import torch
 import torch._inductor.runtime.runtime_utils
@@ -866,10 +866,12 @@ def bmm_replace(mat1: Tensor, mat2: Tensor) -> Tensor:
 
 
 @functools.cache
-def _pad_mm_init() -> None:
+def _pad_mm_init(input_device: Optional[torch.device] = None) -> None:
     from .joint_graph import patterns
 
-    if torch.cuda.is_available():
+    if input_device:
+        device = str(input_device)
+    elif torch.cuda.is_available():
         # workaround https://github.com/pytorch/pytorch/issues/97894
         device = "cuda"
     elif torch.xpu.is_available():
