@@ -931,6 +931,7 @@ def _pad_mm_init(input_device: Optional[torch.device] = None) -> None:
             patterns,
             extra_check=extra_check,
             scalar_workaround=workaround,
+            skip_duplicates=True,
         )
 
         gen_register_replacement(
@@ -944,4 +945,5 @@ def _pad_mm_init(input_device: Optional[torch.device] = None) -> None:
             patterns,
             extra_check=extra_check,
             scalar_workaround=workaround,
+            skip_duplicates=True,
         )

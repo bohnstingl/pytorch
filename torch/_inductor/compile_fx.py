@@ -44,6 +44,7 @@ from torch._dynamo.utils import (
     detect_fake_mode,
     dynamo_timed,
     flatten_graph_inputs,
+    get_inputs_devices,
     get_metrics_context,
     lazy_format_graph_code,
     set_feature_use,
@@ -528,15 +529,23 @@ def _recursive_pre_grad_passes(
 def _recursive_joint_graph_passes(
     gm: GraphModule,
     skip_invoke_subgraph: bool = False,
+    input_device: torch.device | None = None,
     get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
-) -> None:
+) -> GraphModule:
+    def _run_on_sub_graph_module(subgraph_name: str) -> None:
+        subgraph = getattr(gm, subgraph_name)
+        new_subgraph = _recursive_joint_graph_passes(
+            subgraph, skip_invoke_subgraph, input_device, get_decomp_fn=get_decomp_fn
+        )
+        setattr(gm, subgraph_name, new_subgraph)
+
     with dynamo_timed(
         "_recursive_joint_graph_passes",
         log_pt2_compile_event=True,
         dynamo_compile_column_us="joint_graph_pass_time_us",
     ):
         if not config.use_joint_graph_passes:
-            return
+            return gm
 
         # invoke_subgraph already runs the _recursive_joint_graph_passes.  In
         # AOTAutograd, `run_joint_graph_passes_on_hops` partitions the
@@ -544,10 +553,20 @@ def _recursive_joint_graph_passes(
         # AOTAutograd has access to partition_fn, which internally calls the
         # `_recursive_joint_graph_passes` for the subgraph. So, skip recursing
         # skip_invoke_subgraph.
-        for subgraph_name in _get_subgraph_names(gm, skip_invoke_subgraph):
-            subgraph = getattr(gm, subgraph_name)
-            _recursive_joint_graph_passes(subgraph, skip_invoke_subgraph, get_decomp_fn=get_decomp_fn)
-        joint_graph_passes(gm, get_decomp_fn=get_decomp_fn)
+        old_subgraph_names = OrderedSet(_get_subgraph_names(gm, skip_invoke_subgraph))
+        for subgraph_name in old_subgraph_names:
+            _run_on_sub_graph_module(subgraph_name)
+
+        out_gm = joint_graph_passes(gm, input_device, get_decomp_fn=get_decomp_fn)
+
+        # Some joint graph passes may create new sub graph module. Run one round
+        # for the newly created graph modules.
+        # We should not skip graphs for invoke_subgraph HOPs for newly
+        # generated subgraphs.
+        for subgraph_name in _get_subgraph_names(out_gm, skip_invoke_subgraph=False):
+            if subgraph_name not in old_subgraph_names:
+                _run_on_sub_graph_module(subgraph_name)
+        return out_gm
 
 
 def _recursive_post_grad_passes(gm: GraphModule, is_inference: bool = False) -> None:
@@ -2037,7 +2056,10 @@ def fw_compiler_freezing(
     from torch._inductor.freezing import convert_conv_weights_to_channels_last, freeze
 
     # partition_fn won't be called
-    _recursive_joint_graph_passes(aot_autograd_model)
+    inputs_devices = get_inputs_devices(aot_example_inputs, aot_autograd_model)
+    aot_autograd_model = _recursive_joint_graph_passes(
+        aot_autograd_model, input_device=next(iter(inputs_devices))
+    )
 
     layout_opt = GraphLowering.decide_layout_opt(aot_autograd_model, is_inference=True)
     if layout_opt:
@@ -2173,7 +2195,10 @@ def partition_fn(
         # We can skip the invoke_subgraph because the
         # entire_partition_fn is called recursively for invoke_subgraph
         # in partitioning.
-        _recursive_joint_graph_passes(gm, skip_invoke_subgraph=True)
+        inputs_devices = get_inputs_devices(joint_inputs, gm)
+        gm = _recursive_joint_graph_passes(
+            gm, skip_invoke_subgraph=True, input_device=next(iter(inputs_devices))
+        )
 
     static_lifetime_input_indices: Optional[list[int]] = kwargs.pop(  # type: ignore[assignment]
         "static_lifetime_input_indices", None
@@ -2279,7 +2304,8 @@ def compile_fx_forward(
             ),
         )
 
-        _recursive_joint_graph_passes(gm, get_decomp_fn=get_decomp_fn)
+        inputs_devices = get_inputs_devices(example_inputs, gm)
+        gm = _recursive_joint_graph_passes(gm, input_device=next(iter(inputs_devices)), get_decomp_fn=get_decomp_fn)
 
         trace_structured(
             "artifact",

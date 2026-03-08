@@ -3,6 +3,8 @@ import functools
 import inspect
 import logging
 import math
+from collections.abc import Callable
+from typing import Any
 
 import torch
 
@@ -805,14 +807,19 @@ def partialize_and_update_signature(func, **kwargs):
     return wrapper
 
 
-def _get_sfdp_patterns():
+def _get_sfdp_patterns(input_device: torch.device | None = None):
     from .joint_graph import patterns
 
-    if torch.cuda.is_available():
-        # workaround https://github.com/pytorch/pytorch/issues/97894
-        device = "cuda"
+    if input_device:
+        device = str(input_device)
     else:
-        device = "cpu"
+        if torch.cuda.is_available():
+            # workaround https://github.com/pytorch/pytorch/issues/97894
+            device = "cuda"
+        elif torch.xpu.is_available():
+            device = "xpu"
+        else:
+            device = "cpu"
 
     # sizes/values don't actually matter for initial trace
     # once we get a possible match we re-trace with the actual values and verify the match still holds
@@ -1147,11 +1154,15 @@ def _get_sfdp_patterns():
 
 
 @functools.cache
-def _sfdp_init(get_decomp_fn=None):
-    for key, register_replacement_kwargs in _get_sfdp_patterns():
-        # skip_duplicates=True: _sfdp_init is cached per get_decomp_fn, so two
-        # compilations with different get_decomp_fn values both register the same
-        # SFDP patterns; the second call must skip gracefully.
+def _sfdp_init(
+    input_device: torch.device | None = None,
+    get_decomp_fn: Callable[..., dict[Any, Callable[..., Any]]] | None = None,
+):
+    for key, register_replacement_kwargs in _get_sfdp_patterns(input_device):
+        # skip_duplicates=True is always needed: _sfdp_init is cached per
+        # (input_device, get_decomp_fn), so two compilations with different
+        # get_decomp_fn values will both try to register the same SFDP patterns.
+        # The second call must skip gracefully.
         register_replacement_kwargs = {
             **register_replacement_kwargs,
             "skip_duplicates": True,
