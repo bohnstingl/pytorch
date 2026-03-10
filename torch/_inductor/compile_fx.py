@@ -530,12 +530,11 @@ def _recursive_joint_graph_passes(
     gm: GraphModule,
     skip_invoke_subgraph: bool = False,
     input_device: torch.device | None = None,
-    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> GraphModule:
     def _run_on_sub_graph_module(subgraph_name: str) -> None:
         subgraph = getattr(gm, subgraph_name)
         new_subgraph = _recursive_joint_graph_passes(
-            subgraph, skip_invoke_subgraph, input_device, get_decomp_fn=get_decomp_fn
+            subgraph, skip_invoke_subgraph, input_device
         )
         setattr(gm, subgraph_name, new_subgraph)
 
@@ -557,7 +556,7 @@ def _recursive_joint_graph_passes(
         for subgraph_name in old_subgraph_names:
             _run_on_sub_graph_module(subgraph_name)
 
-        out_gm = joint_graph_passes(gm, input_device, get_decomp_fn=get_decomp_fn)
+        out_gm = joint_graph_passes(gm, input_device)
 
         # Some joint graph passes may create new sub graph module. Run one round
         # for the newly created graph modules.
@@ -2283,7 +2282,6 @@ def compile_fx_forward(
     compiler_config_extra: CompilerConfigExtra,
     inner_compile: Callable[..., OutputCode] = compile_fx_inner,
     is_inference: bool = False,
-    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ) -> OutputCode:
     """
     Compile the forward graph of the given graph module.
@@ -2296,8 +2294,6 @@ def compile_fx_forward(
         compiler_config_extra: Extra configuration for the compiler.
         inner_compile: The inner compile function to use.
         is_inference: Whether this is an inference graph.
-        get_decomp_fn: Optional callable returning the decomposition table to use for
-            joint-graph pattern matching (SFDP etc.).  Only used on the inference path.
     """
 
     if is_inference:
@@ -2314,7 +2310,7 @@ def compile_fx_forward(
         )
 
         inputs_devices = get_inputs_devices(example_inputs, gm)
-        gm = _recursive_joint_graph_passes(gm, input_device=next(iter(inputs_devices)), get_decomp_fn=get_decomp_fn)
+        gm = _recursive_joint_graph_passes(gm, input_device=next(iter(inputs_devices)))
 
         trace_structured(
             "artifact",
@@ -2733,7 +2729,6 @@ def _compile_fx_main(
                     compiler_config_extra=compiler_config_extra,
                     inner_compile=inner_compile,
                     is_inference=is_inference,
-                    get_decomp_fn=get_decomp_fn,
                 )
 
         fw_compiler: Callable[[GraphModule, Sequence[InputType]], OutputCode] = (

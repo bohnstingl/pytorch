@@ -5,8 +5,8 @@ import logging
 import operator
 import typing
 from collections import Counter
-from collections.abc import Callable, Sequence
-from typing import Any, Optional
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 import torch._guards
@@ -55,16 +55,13 @@ pass_patterns = [
 
 
 @init_once_fakemode
-def lazy_init(
-    input_device: torch.device | None = None,
-    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
-):
+def lazy_init(input_device: torch.device | None = None):
     from .fuse_attention import _sfdp_init
     from .misc_patterns import _misc_patterns_init
     from .pad_mm import _pad_mm_init
 
     _pad_mm_init(input_device)
-    _sfdp_init(input_device, get_decomp_fn=get_decomp_fn)
+    _sfdp_init(input_device)
     _misc_patterns_init(input_device)
 
 
@@ -570,7 +567,6 @@ def canonicalize_aten_ir_passes(gm: torch.fx.GraphModule):
 def joint_graph_passes(
     graph: torch.fx.GraphModule,
     input_device: torch.device | None = None,
-    get_decomp_fn: Optional[Callable[..., dict[Any, Callable[..., Any]]]] = None,
 ):
     """
     Run FX transformations on the joint forwards+backwards graph.
@@ -580,7 +576,7 @@ def joint_graph_passes(
         subsystem="joint_graph_passes",
     )
 
-    lazy_init(input_device, get_decomp_fn=get_decomp_fn)
+    lazy_init(input_device)
     count = 0
 
     # must occur before other passes
