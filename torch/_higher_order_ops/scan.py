@@ -321,7 +321,7 @@ def generic_scan(operator, init, xs, dim=0, additional_inputs=()):
         # out: (num_elems, M, N, ...)
         # idx: (1, M, N)
         outs = [
-            torch.zeros(
+            torch.empty(
                 [num_elems] + list(e.size()),
                 dtype=e.dtype,
                 device=e.device,
