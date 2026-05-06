@@ -38,7 +38,8 @@ def count_ops(
         return False
 
     if op is not None:
-        assert not isinstance(op, list)
+        if isinstance(op, list):
+            raise AssertionError("Expected op to not be a list")
         ops = [op]
     if freq is not None:
         freqs = [freq]
@@ -51,17 +52,20 @@ def count_ops(
                 if match_rng_op(node, op) or node.target == op:
                     actual_count += 1
             err_msg = f"In graph {gm}, expected {op} to have occurred {freq} times in the graph, but got {actual_count}."
-            assert actual_count == freq, err_msg
+            if actual_count != freq:
+                raise AssertionError(err_msg)
     else:
-        assert freqs_ge is not None
+        if freqs_ge is None:
+            raise AssertionError("Expected freqs_ge to not be None")
         for op, freq_ge in zip(ops, freqs_ge):
             actual_count = 0
             for node in gm.graph.nodes:
                 if match_rng_op(node, op) or node.target == op:
                     actual_count += 1
-            assert actual_count >= freq_ge, (
-                f"In graph {gm}, expected {op} to have occurred at least {freq_ge} times in the graph, but got {actual_count}."
-            )
+            if actual_count < freq_ge:
+                raise AssertionError(
+                    f"In graph {gm}, expected {op} to have occurred at least {freq_ge} times in the graph, but got {actual_count}."
+                )
     return gm
 
 
@@ -92,6 +96,33 @@ class TestWrapInductorCompiledRegions(torch._dynamo.test_case.TestCase):
         self.assertIn("inductor_compiled_code", debug_string)
 
         # Result should be correct
+        expected = torch.matmul(x, y)
+        self.assertEqual(result, expected)
+
+    @requires_cuda_and_triton
+    def test_wrap_name_visible_in_debug_mode(self):
+        """Test that named compiled regions surface their name in DebugMode"""
+
+        @torch.compile(
+            backend="inductor",
+            options={"wrap_inductor_compiled_regions": True},
+            fullgraph=True,
+            name="flex_attention",
+        )
+        def fn(x, y):
+            return torch.matmul(x, y)
+
+        x = torch.randn(4, 4, device="cuda")
+        y = torch.randn(4, 4, device="cuda")
+
+        with DebugMode() as debug_mode:
+            result = fn(x, y)
+
+        debug_string = debug_mode.debug_string()
+
+        self.assertIn("inductor_compiled_code", debug_string)
+        self.assertIn("name=flex_attention", debug_string)
+
         expected = torch.matmul(x, y)
         self.assertEqual(result, expected)
 
@@ -914,6 +945,60 @@ class TestWrapInductorCompiledRegions(torch._dynamo.test_case.TestCase):
         loss_eager = b_eager.sum()
         loss_eager.backward()
 
+        self.assertEqual(output, b_eager)
+        self.assertEqual(x.grad, x_eager.grad)
+        self.assertEqual(y.grad, y_eager.grad)
+
+    @requires_cuda_and_triton
+    def test_sac_outer_compile_inner_name_visible_to_policy(self):
+        """Test that SAC policies can inspect torch.compile region names"""
+
+        @torch.compile(
+            backend="inductor",
+            options={"wrap_inductor_compiled_regions": True},
+            fullgraph=True,
+            name="flex_attention",
+        )
+        def inner_compiled_matmul(x, y):
+            return torch.matmul(x, y)
+
+        seen_region_names = []
+
+        def policy_fn(ctx, op, *args, **kwargs):
+            from torch._higher_order_ops.wrap import inductor_compiled_code
+
+            if op == inductor_compiled_code:
+                seen_region_names.append(kwargs.get("name"))
+            return CheckpointPolicy.PREFER_RECOMPUTE
+
+        def checkpointed_fn(x, y):
+            a = inner_compiled_matmul(x, y)
+            return torch.relu(a)
+
+        x = torch.randn(4, 4, device="cuda", requires_grad=True)
+        y = torch.randn(4, 4, device="cuda", requires_grad=True)
+
+        x_eager = x.detach().clone().requires_grad_(True)
+        y_eager = y.detach().clone().requires_grad_(True)
+
+        context_fn = functools.partial(create_selective_checkpoint_contexts, policy_fn)
+
+        output = checkpoint(
+            checkpointed_fn,
+            x,
+            y,
+            use_reentrant=False,
+            context_fn=context_fn,
+        )
+        loss = output.sum()
+        loss.backward()
+
+        a_eager = torch.matmul(x_eager, y_eager)
+        b_eager = torch.relu(a_eager)
+        loss_eager = b_eager.sum()
+        loss_eager.backward()
+
+        self.assertIn("flex_attention", seen_region_names)
         self.assertEqual(output, b_eager)
         self.assertEqual(x.grad, x_eager.grad)
         self.assertEqual(y.grad, y_eager.grad)

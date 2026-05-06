@@ -7,7 +7,7 @@ from __future__ import annotations
 import itertools
 import operator
 from collections.abc import Callable
-from typing import Optional, overload, TYPE_CHECKING, TypeAlias, TypeVar
+from typing import overload, TYPE_CHECKING, TypeAlias, TypeVar
 
 from ..decorators import substitute_in_graph
 
@@ -26,6 +26,7 @@ __all__ = [
     "filterfalse",
     "islice",
     "pairwise",
+    "starmap",
     "takewhile",
     "tee",
     "zip_longest",
@@ -50,9 +51,9 @@ def chain(*iterables: Iterable[_T]) -> Iterator[_T]:
 @substitute_in_graph(itertools.accumulate, is_embedded_type=True)  # type: ignore[arg-type]
 def accumulate(
     iterable: Iterable[_T],
-    func: Optional[Callable[[_T, _T], _T]] = None,
+    func: Callable[[_T, _T], _T] | None = None,
     *,
-    initial: Optional[_T] = None,
+    initial: _T | None = None,
 ) -> Iterator[_T]:
     # call iter outside of the generator to match cypthon behavior
     iterator = iter(iterable)
@@ -139,6 +140,50 @@ def takewhile(predicate: _Predicate[_T], iterable: Iterable[_T], /) -> Iterator[
         if not predicate(x):
             break
         yield x
+
+
+@overload
+def starmap(
+    function: Callable[[], _U],
+    iterable: Iterable[tuple[()]],
+    /,
+) -> itertools.starmap[_U]: ...
+
+
+@overload
+def starmap(
+    function: Callable[[_T], _U],
+    iterable: Iterable[tuple[_T]],
+    /,
+) -> itertools.starmap[_U]: ...
+
+
+@overload
+def starmap(
+    function: Callable[[_T, _T1], _U],
+    iterable: Iterable[tuple[_T, _T1]],
+    /,
+) -> itertools.starmap[_U]: ...
+
+
+@overload
+def starmap(
+    function: Callable[[_T, _T1, _T2], _U],
+    iterable: Iterable[tuple[_T, _T1, _T2]],
+    /,
+) -> itertools.starmap[_U]: ...
+
+
+# Reference: https://docs.python.org/3/library/itertools.html#itertools.starmap
+@substitute_in_graph(itertools.starmap, is_embedded_type=True)  # type: ignore[arg-type]
+# pyrefly: ignore [implicit-any]
+def starmap(function: Callable[..., _T], iterable: Iterable, /) -> Iterable[_T]:
+    # starmap(pow, [(2,5), (3,2), (10,3)]) → 32 9 1000
+    if not callable(function):
+        raise TypeError(f"'{type(function).__name__}' object is not callable")
+
+    for args in iterable:
+        yield function(*args)
 
 
 @substitute_in_graph(itertools.filterfalse, is_embedded_type=True)  # type: ignore[arg-type]

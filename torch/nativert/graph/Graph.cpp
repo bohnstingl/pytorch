@@ -194,6 +194,9 @@ std::ostream& operator<<(std::ostream& out, const Type& ty) {
             case Type::Kind::TensorList:
               out << "TensorList";
               break;
+            case Type::Kind::NestedTensorList:
+              out << "NestedTensorList";
+              break;
             case Type::Kind::OptionalTensorList:
               out << "OptionalTensorList";
               break;
@@ -417,6 +420,10 @@ Node* Graph::createListPack(std::vector<Value*> inputs, const Type& inputType) {
     node->addOutput(name, Type::Kind::TensorList);
   } else if (inputType == Type::Kind::SymInt) {
     node->addOutput(name, Type::Kind::SymIntList);
+  } else if (inputType == Type::Kind::TensorList) {
+    // For nested tensor lists (List[List[Tensor]]), the inner lists are
+    // TensorList type. We output a NestedTensorList type.
+    node->addOutput(name, Type::Kind::NestedTensorList);
   }
 
   return node;
@@ -545,6 +552,24 @@ bool Graph::cleanupDeadNodes() {
   }
 
   const bool mutated = !toRemove.empty();
+
+  if (mutated && VLOG_IS_ON(1)) {
+    c10::FastMap<std::string_view, int> removedByTarget;
+    for (const auto* n : toRemove) {
+      removedByTarget[n->target()]++;
+    }
+    VLOG(1) << "cleanupDeadNodes: removing " << toRemove.size()
+            << " dead nodes. Breakdown by op:";
+    // Sort by count descending for readability
+    std::vector<std::pair<std::string_view, int>> sorted(
+        removedByTarget.begin(), removedByTarget.end());
+    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+      return a.second > b.second;
+    });
+    for (const auto& [target, count] : sorted) {
+      VLOG(1) << "  " << target << ": " << count;
+    }
+  }
 
   // Remove nodes in reverse order to handle input/output dependencies
   for (auto it = toRemove.rbegin(); it != toRemove.rend(); ++it) {
@@ -939,10 +964,7 @@ void Value::addUser(Node* node) {
 }
 
 void Value::eraseUser(Node* node) {
-  users_.erase(
-      std::remove_if(
-          users_.begin(), users_.end(), [&](Node* el) { return el == node; }),
-      users_.end());
+  std::erase(users_, node);
 }
 
 std::vector<const Value*> Value::getListElements() const {
@@ -1050,6 +1072,15 @@ std::ostream& operator<<(std::ostream& out, const Constant& constant) {
         } else if constexpr (is_same_v<T, vector<string>>) {
           out << fmt::format("[{}]", fmt::join(arg, ","));
         } else if constexpr (is_same_v<T, vector<vector<int64_t>>>) {
+          out << '[';
+          for (const auto& [idx, inner_list] : c10::enumerate(arg)) {
+            if (idx > 0) {
+              out << ", ";
+            }
+            out << fmt::format("{}", fmt::streamed(inner_list));
+          }
+          out << ']';
+        } else if constexpr (is_same_v<T, vector<vector<double>>>) {
           out << '[';
           for (const auto& [idx, inner_list] : c10::enumerate(arg)) {
             if (idx > 0) {

@@ -3,9 +3,10 @@ import dataclasses
 import hashlib
 import inspect
 import re
+import types
 import typing
 from enum import IntEnum
-from typing import Annotated, Any, ForwardRef, Optional, Union
+from typing import Annotated, Any, ForwardRef, Union
 
 from torch._export.serde import schema
 from torch._export.serde.union import _Union
@@ -81,7 +82,7 @@ def _staged_schema():
                         "map<",
                         ">",
                     )
-                elif o == Union:
+                elif o is Union or o is types.UnionType:
                     if level != 0:
                         raise AssertionError(
                             f"Optional is only supported at the top level, got level={level}"
@@ -134,10 +135,10 @@ def _staged_schema():
                     f"Default value {v} is not supported yet in export schema."
                 )
 
-        def dump_field(f) -> tuple[dict[str, Any], str, Optional[str], str, int]:
+        def dump_field(f) -> tuple[dict[str, Any], str, str | None, str, int]:
             t, cpp_type, thrift_type = dump_type(f.type, 0)
             ret = {"type": t}
-            cpp_default: Optional[str] = None
+            cpp_default: str | None = None
             if typing.get_origin(f.type) is not Annotated:
                 raise AssertionError(
                     f"Field {f.name} must be annotated with an integer id."
@@ -242,7 +243,7 @@ enum {name} {{
 
         to_json_decl = f"void to_json(nlohmann::json& nlohmann_json_j, const {name}& nlohmann_json_t)"
         to_json_def = f"""{{
-{chr(10).join([f'  nlohmann_json_j["{name}"] = nlohmann_json_t.{name};' for name, f in cpp_fields.items()])}
+{chr(10).join([f'  nlohmann_json_j["{name}"] = nlohmann_json_t.{name};' for name in cpp_fields])}
 }}
 """
         from_json_decl = f"void from_json(const nlohmann::json& nlohmann_json_j, {name}& nlohmann_json_t)"
@@ -253,7 +254,7 @@ enum {name} {{
             chr(10).join(
                 [
                     f'  nlohmann_json_t.{name} = nlohmann_json_j.value("{name}", nlohmann_json_default_obj.{name});'
-                    for name, f in cpp_fields.items()
+                    for name in cpp_fields
                 ]
             )
         }
@@ -752,13 +753,13 @@ class _Commit:
     additions: dict[str, Any]
     subtractions: dict[str, Any]
     base: dict[str, Any]
-    checksum_head: Optional[str]
+    checksum_head: str | None
     cpp_header: str
     cpp_header_path: str
     enum_converter_header: str
     enum_converter_header_path: str
-    thrift_checksum_head: Optional[str]
-    thrift_checksum_real: Optional[str]
+    thrift_checksum_head: str | None
+    thrift_checksum_real: str | None
     thrift_checksum_next: str
     thrift_schema: str
     thrift_schema_path: str
@@ -882,7 +883,7 @@ def check(commit: _Commit, force_unsafe: bool = False):
             for k, v in commit.additions.items():
                 for f in v["fields"]:
                     reason += (
-                        f"Field {k}.{f} is added to schema.py as an compatible change "
+                        f"Field {k}.{f} is added to schema.py as a compatible change "
                         + "which still requires minor version bump.\n"
                     )
             next_version = [
@@ -893,7 +894,7 @@ def check(commit: _Commit, force_unsafe: bool = False):
             for k, v in commit.subtractions.items():
                 for f in v["fields"]:
                     reason += (
-                        f"Field {k}.{f} is removed from schema.py as an compatible change "
+                        f"Field {k}.{f} is removed from schema.py as a compatible change "
                         + "which still requires minor version bump.\n"
                     )
             next_version = [

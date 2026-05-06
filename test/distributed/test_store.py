@@ -303,7 +303,8 @@ class FileStoreTest(TestCase, StoreTestBase):
                 "gloo", rank=0, world_size=1, init_method=f"file://{file.name}"
             )
             dist.destroy_process_group()
-            assert os.path.exists(file.name)
+            if not os.path.exists(file.name):
+                raise AssertionError(f"Expected file {file.name} to exist")
 
             rpc.shutdown()
             os.remove(file.name)
@@ -314,9 +315,11 @@ class FileStoreTest(TestCase, StoreTestBase):
             store2 = dist.FileStore(file.name, 1)
 
             del store
-            assert os.path.exists(file.name)
+            if not os.path.exists(file.name):
+                raise AssertionError(f"Expected file {file.name} to exist")
             del store2
-            assert not os.path.exists(file.name)
+            if os.path.exists(file.name):
+                raise AssertionError(f"Expected file {file.name} to not exist")
 
     @property
     def num_keys_total(self):
@@ -393,8 +396,8 @@ class TCPStoreTest(TestCase, StoreTestBase):
             # Use noqa to silence flake8.
             # Need to store in an unused variable here to ensure the first
             # object is not destroyed before the second object is created.
-            store1 = dist.TCPStore(addr, port, 1, True, use_libuv=self._use_libuv)  # noqa: F841
-            store2 = dist.TCPStore(addr, port, 1, True, use_libuv=self._use_libuv)  # noqa: F841
+            store1 = dist.TCPStore(addr, port, 1, True, use_libuv=self._use_libuv)
+            store2 = dist.TCPStore(addr, port, 1, True, use_libuv=self._use_libuv)
             self.assertEqual(store1.libuvBackend, self._use_libuv)
             self.assertEqual(store2.libuvBackend, self._use_libuv)
 
@@ -408,10 +411,10 @@ class TCPStoreTest(TestCase, StoreTestBase):
         # object is not destroyed before the second object is created.
         store1 = dist.TCPStore(
             addr, port, 1, True, multi_tenant=True, use_libuv=self._use_libuv
-        )  # type: ignore[call-arg] # noqa: F841
+        )  # type: ignore[call-arg]
         store2 = dist.TCPStore(
             addr, port, 1, True, multi_tenant=True, use_libuv=self._use_libuv
-        )  # type: ignore[call-arg] # noqa: F841
+        )  # type: ignore[call-arg]
         self.assertEqual(store1.libuvBackend, self._use_libuv)
         self.assertEqual(store2.libuvBackend, self._use_libuv)
 
@@ -470,7 +473,8 @@ class TCPStoreTest(TestCase, StoreTestBase):
         )
 
         del os.environ["USE_LIBUV"]
-        assert "USE_LIBUV" not in os.environ
+        if "USE_LIBUV" in os.environ:
+            raise AssertionError("Expected USE_LIBUV to not be in os.environ")
         rpc.shutdown()
         dist.destroy_process_group()
 
@@ -1104,7 +1108,7 @@ class TimeoutTest(TestCase):
                 else:
                     my_store.wait(["foo"], datetime.timedelta(seconds=10))
                 rank_res[rank] = True
-            except BaseException as e:  # noqa: B036,E261
+            except BaseException as e:  # noqa: E261
                 rank_res[rank] = e
             time.sleep(1)
 
@@ -1232,7 +1236,8 @@ class TestClientProtocol(TestCase):
 
 if __name__ == "__main__":
     if device_type != "cpu":
-        assert not torch.get_device_module()._initialized, (
-            f"test_distributed must not have initialized {device_type} context on main process"
-        )
+        if torch.get_device_module()._initialized:
+            raise AssertionError(
+                f"test_distributed must not have initialized {device_type} context on main process"
+            )
     run_tests()

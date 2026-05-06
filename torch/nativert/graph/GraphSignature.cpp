@@ -17,6 +17,7 @@ bool isSymbolicOutput(torch::_export::Argument::Tag t) {
   switch (t) {
     case torch::_export::Argument::Tag::AS_TENSOR:
     case torch::_export::Argument::Tag::AS_TENSORS:
+    case torch::_export::Argument::Tag::AS_NESTED_TENSORS:
     case torch::_export::Argument::Tag::AS_OPTIONAL_TENSOR:
     case torch::_export::Argument::Tag::AS_OPTIONAL_TENSORS:
     case torch::_export::Argument::Tag::AS_SYM_BOOL:
@@ -257,6 +258,8 @@ GraphSignature::GraphSignature(const torch::_export::GraphSignature& storage) {
             userInputArg.tag() ==
                 torch::_export::Argument::Tag::AS_SYM_FLOATS ||
             userInputArg.tag() == torch::_export::Argument::Tag::AS_INT_LISTS ||
+            userInputArg.tag() ==
+                torch::_export::Argument::Tag::AS_FLOAT_LISTS ||
             userInputArg.tag() ==
                 torch::_export::Argument::Tag::AS_SCALAR_TYPE ||
             userInputArg.tag() ==
