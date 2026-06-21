@@ -128,17 +128,10 @@ def switch(
     if len(wrapped_branches) == 1:
         return wrapped_branches[0](*leaves_operands)
 
-    # If already compiling with dynamo, dispatch directly to the HOP. This is
-    # required: under dynamo trace, isinstance(SymNodeVariable, int) returns
-    # True, so without this guard a SymInt index would hit the int shortcut
-    # below and be specialized instead of preserving the HOP.
-    if torch.compiler.is_dynamo_compiling():
-        return switch_op(index, wrapped_branches, leaves_operands)
-
-    # Constant index shortcut for eager mode
-    if isinstance(index, int):
+    # Constant index shortcut for eager mode.
+    if not torch.compiler.is_dynamo_compiling() and isinstance(index, int):
         # This is the non-strict export case. Strict export and torch.compile are
-        # handled above in dynamo.
+        # handled below via _maybe_compile_and_run_fn.
         if torch.compiler.is_compiling():
             warnings.warn(
                 "Index is a Python constant. When used with torch.switch, it specializes on one of the branches."

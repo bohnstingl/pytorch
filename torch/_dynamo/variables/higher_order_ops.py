@@ -26,6 +26,7 @@ import logging
 import traceback
 import types
 import warnings
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast, Literal, Optional, TYPE_CHECKING, Union
@@ -1288,40 +1289,34 @@ def _merge_graph_inputs(
     lifted_freevars: list[dict[Proxy, Proxy]],
     names: list[str],
 ) -> tuple[list[Proxy], list[list[Proxy]]]:
-    if len(graphs) != len(lifted_freevars) or len(graphs) != len(names):
+    n = len(graphs)
+    if n != len(lifted_freevars) or n != len(names):
         raise AssertionError(
             "Expected graphs, lifted_freevars and names to have the same length"
         )
-    if len(graphs) == 0:
+    if n == 0:
         raise AssertionError("Expected at least one graph")
 
     # Step 1: pick a canonical proxy for every distinct outer freevar across
-    # branches, deduplicating get_attrs that share a target.
+    # branches, deduplicating get_attrs that share a target. A canonical proxy
+    # is shared iff every branch contributed to it.
     get_attr_canonical: dict[Any, Proxy] = {}
     per_branch_outer_to_canonical: list[dict[Proxy, Proxy]] = []
+    canonical_branch_count: Counter[Proxy] = Counter()
     for branch_lifted in lifted_freevars:
         outer_to_canonical: dict[Proxy, Proxy] = {}
         for outer in branch_lifted:
+            canonical = outer
             if outer.node.op == "get_attr":
                 target = outer.node.target
-                if target not in get_attr_canonical:
-                    get_attr_canonical[target] = outer
-                outer_to_canonical[outer] = get_attr_canonical[target]
-            else:
-                outer_to_canonical[outer] = outer
+                canonical = get_attr_canonical.setdefault(target, outer)
+            outer_to_canonical[outer] = canonical
         per_branch_outer_to_canonical.append(outer_to_canonical)
+        canonical_branch_count.update(set(outer_to_canonical.values()))
 
-    # Step 2: a canonical proxy is shared iff every branch contributed to it.
-    canonical_branch_count: dict[Proxy, int] = {}
-    for outer_to_canonical in per_branch_outer_to_canonical:
-        for canonical in set(outer_to_canonical.values()):
-            canonical_branch_count[canonical] = (
-                canonical_branch_count.get(canonical, 0) + 1
-            )
-    n = len(graphs)
     shared_canonical = {c for c, count in canonical_branch_count.items() if count == n}
 
-    # Step 3: derive the shared block and the per-branch unique blocks. Plain
+    # Step 2: derive the shared block and the per-branch unique blocks. Plain
     # proxies are the same object across branches, so a single canonical entry
     # covers all of them; for shared get_attrs the canonical is the branch-0
     # proxy.
