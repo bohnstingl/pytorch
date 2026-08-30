@@ -731,7 +731,11 @@ def decompose_scan_to_while_loop(gm: torch.fx.GraphModule):
                 "kwargs of scan are not merged into args before entering decompose_scan_to_while_loop_pass"
             )
 
-        combine_subgraph, fx_init, fx_xs, fx_additional_inputs = args
+        # ys_buffers is scan's optional trailing operand group: the caller's
+        # destinations for the per-step outputs, which replace the pre-allocated
+        # buffer below. See NOTE [Pre-allocate scan's output buffer].
+        combine_subgraph, fx_init, fx_xs, fx_additional_inputs, *rest = args
+        fx_ys_buffers = tuple(rest[0]) if rest else ()
         if combine_subgraph.op != "get_attr":
             raise AssertionError("first arg is not combine_subgraph")
         sub_gm: torch.fx.GraphModule = getattr(gm, combine_subgraph.target)
@@ -751,9 +755,12 @@ def decompose_scan_to_while_loop(gm: torch.fx.GraphModule):
                 init,
                 xs,
                 additional_inputs,
+                ys_buffers,
             ) = pytree.tree_unflatten(args, tree_spec)
             scan_length = xs[0].size(0)
             if scan_length == 0:
+                if ys_buffers:
+                    return list(init) + list(ys_buffers)
                 empty_ys = [
                     torch.empty(
                         [0] + list(ys_out.shape[1:]),
@@ -767,6 +774,10 @@ def decompose_scan_to_while_loop(gm: torch.fx.GraphModule):
             loop_idx = torch.zeros([], dtype=torch.int64, device=torch.device("cpu"))
 
             # NOTE [Pre-allocate scan's output buffer]
+            # When the caller passed destinations via scan's ys_buffers, we write the
+            # per-step outputs straight into them and allocate nothing.
+            #
+            # Otherwise:
             # In order to pre-allocate the output buffer for ys, we rely on the meta of scan's fx_node.
             # However, the meta consists of concrete symints, we need to bind those symints with
             # proxies in order to trace the torch.empty_strided call correctly.
@@ -779,17 +790,21 @@ def decompose_scan_to_while_loop(gm: torch.fx.GraphModule):
                 for arg in pytree.tree_leaves((args, scan_length))
                 if isinstance(arg, torch.SymInt)
             }
-            ys_outs = [
-                torch.empty_strided(
-                    resolve_shape_to_proxy(ys_out.size(), bound_symbols),
-                    resolve_shape_to_proxy(ys_out.stride(), bound_symbols),
-                    device=ys_out.device,
-                    dtype=ys_out.dtype,
-                    layout=ys_out.layout,
-                    requires_grad=ys_out.requires_grad,
-                )
-                for ys_out in ys_outputs
-            ]
+            ys_outs = (
+                list(ys_buffers)
+                if ys_buffers
+                else [
+                    torch.empty_strided(
+                        resolve_shape_to_proxy(ys_out.size(), bound_symbols),
+                        resolve_shape_to_proxy(ys_out.stride(), bound_symbols),
+                        device=ys_out.device,
+                        dtype=ys_out.dtype,
+                        layout=ys_out.layout,
+                        requires_grad=ys_out.requires_grad,
+                    )
+                    for ys_out in ys_outputs
+                ]
+            )
 
             while_loop_operands = (loop_idx, ys_outs, init, xs)
             flat_operands, operands_spec = pytree.tree_flatten(while_loop_operands)
@@ -840,6 +855,7 @@ def decompose_scan_to_while_loop(gm: torch.fx.GraphModule):
                 fx_init,
                 fx_xs,
                 fx_additional_inputs,
+                fx_ys_buffers,
             )
         )
         match.replace_by_example(

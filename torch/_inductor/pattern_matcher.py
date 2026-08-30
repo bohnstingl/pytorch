@@ -1533,8 +1533,8 @@ class ReplacementPatternEntry(PatternEntry):
                 )
             replacement = Replacer(replacement_graph).run(*args)
             # A bare node means the replacement graph returned a single value,
-            # while a sequence means it returned a pack. 
-            # Record it before normalizing, because afterwards a one-element pack 
+            # while a sequence means it returned a pack.
+            # Record it before normalizing, because afterwards a one-element pack
             # would be indistinguishable from a bare node.
             replacement_is_packed = not isinstance(replacement, torch.fx.Node)
             if isinstance(replacement, torch.fx.Node):

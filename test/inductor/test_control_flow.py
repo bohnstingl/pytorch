@@ -17,6 +17,7 @@ from torch._higher_order_ops.scan import _fake_scan, scan
 from torch._higher_order_ops.switch import switch
 from torch._inductor.custom_graph_pass import CustomGraphPass
 from torch._inductor.test_case import TestCase
+from torch._inductor.utils import run_and_get_code
 from torch.testing._internal.common_utils import (
     decorateIf,
     instantiate_parametrized_tests,
@@ -2397,6 +2398,92 @@ class ScanTests(TestCase):
             dynamic=dynamic,
             autograd=False,
         )
+
+    # Not @requires_gpu: out= is about which buffers the lowering allocates,
+    # which is a device-independent property of the generated wrapper.
+    @parametrize("device", ["cpu"] + ([GPU_TYPE] if HAS_GPU else []))
+    @parametrize("dynamic", [True, False])
+    def test_scan_out(self, device, dynamic):
+        L, M, K, N = 4, 3, 5, 7
+        y = torch.randn(K, N, device=device)
+        init = torch.zeros((), device=device)
+        xs = torch.randn(L, M, K, device=device)
+
+        def combine(c, x):
+            return c + 1.0, x @ y
+
+        def f(init, xs, dest):
+            return scan(combine, init, xs, out=dest)
+
+        with torch.no_grad():
+            exp_carry, exp_ys = _fake_scan(combine, init, xs)
+            dest = torch.zeros(L, M, N, device=device)
+            compiled = torch.compile(f, fullgraph=True, dynamic=dynamic)
+            (carry, _), code = run_and_get_code(compiled, init, xs, dest)
+
+        self.assertEqual(carry, exp_carry)
+        self.assertEqual(dest, exp_ys)
+
+        # The whole point of out=: the stacked output is never allocated, only
+        # the per-step tile is.
+        allocs = [
+            line for line in "\n".join(code).splitlines() if "empty_strided" in line
+        ]
+        self.assertTrue(
+            all(f"({L}, {M}, {N}" not in line for line in allocs),
+            f"stacked output was still allocated: {allocs}",
+        )
+
+    @parametrize("device", ["cpu"] + ([GPU_TYPE] if HAS_GPU else []))
+    @parametrize("dynamic", [True, False])
+    def test_scan_out_strided_view(self, device, dynamic):
+        # A destination whose scan dim is not the outermost one reaches the
+        # lowering as a non-contiguous view and must be written through, not
+        # copied into.
+        def combine(c, x):
+            return c + 1.0, x * 2.0
+
+        def f(init, xs, dest):
+            return scan(combine, init, xs, out=dest.movedim(1, 0))
+
+        init = torch.zeros((), device=device)
+        xs = torch.randn(4, 2, 3, device=device)
+        dest = torch.zeros(2, 4, 3, device=device)
+
+        with torch.no_grad():
+            exp_carry, exp_ys = _fake_scan(combine, init, xs)
+            carry, _ = torch.compile(f, fullgraph=True, dynamic=dynamic)(init, xs, dest)
+
+        self.assertEqual(carry, exp_carry)
+        self.assertEqual(dest, exp_ys.movedim(0, 1))
+
+    @parametrize("device", ["cpu"] + ([GPU_TYPE] if HAS_GPU else []))
+    @parametrize("dynamic", [True, False])
+    def test_scan_out_with_mutated_additional_input(self, device, dynamic):
+        # out= plus a mutated additional input gives the while_loop two
+        # mutated operands at non-adjacent positions, which the lowering has to
+        # collect in sorted order.
+        def f(init, xs, dest, acc):
+            def combine(c, x):
+                acc.add_(x.sum())
+                return c + 1.0, x * 2.0
+
+            return scan(combine, init, xs, out=dest)
+
+        init = torch.zeros((), device=device)
+        xs = torch.randn(4, 3, device=device)
+
+        def run(fn):
+            dest = torch.zeros(4, 3, device=device)
+            acc = torch.zeros((), device=device)
+            carry, _ = fn(init, xs, dest, acc)
+            return carry, dest, acc
+
+        with torch.no_grad():
+            exp = run(f)
+            got = run(torch.compile(f, fullgraph=True, dynamic=dynamic))
+
+        self.assertEqual(exp, got)
 
 
 class MapModels:

@@ -3218,13 +3218,25 @@ class ScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
             init: VariableTracker,
             xs: VariableTracker,
             additional_inputs: VariableTracker,
-        ) -> tuple[VariableTracker, VariableTracker, VariableTracker, VariableTracker]:
-            return combine_fn, init, xs, additional_inputs
+            ys_buffers: VariableTracker | None = None,
+        ) -> tuple[
+            VariableTracker,
+            VariableTracker,
+            VariableTracker,
+            VariableTracker,
+            VariableTracker | None,
+        ]:
+            return combine_fn, init, xs, additional_inputs, ys_buffers
 
-        combine_fn, init, xs, additional_inputs = arg_extractor(*args, **kwargs)
+        combine_fn, init, xs, additional_inputs, ys_buffers = arg_extractor(
+            *args, **kwargs
+        )
         init_vars = unpack_iterable(tx, init)
         xs_vars = unpack_iterable(tx, xs)
         additional_inputs_vars = unpack_iterable(tx, additional_inputs)
+        ys_buffers_vars = (
+            unpack_iterable(tx, ys_buffers) if ys_buffers is not None else []
+        )
 
         # combine_fn input check
         combine_fn_is_normalized = _check_combine_fn_is_normalized(combine_fn)
@@ -3283,9 +3295,23 @@ class ScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
                     *graph_break_hints.DYNAMO_BUG,
                 ],
             )
+        # ys_buffers input check
+        if ys_buffers is not None and not isinstance(
+            ys_buffers, (ListVariable, TupleVariable)
+        ):
+            unimplemented(
+                gb_type="torch.scan: improper ys_buffers",
+                context=str(ys_buffers),
+                explanation="Expected ys_buffers to be a list/tuple but got "
+                f"{ys_buffers.python_type()}",
+                hints=[
+                    *graph_break_hints.DYNAMO_BUG,
+                ],
+            )
         _check_all_tensorvariable(init_vars)
         _check_all_tensorvariable(xs_vars)
         _check_all_tensorvariable(additional_inputs_vars)
+        _check_all_tensorvariable(ys_buffers_vars)
 
         with discard_graph_changes(tx):
             sub_args_init = [
@@ -3443,12 +3469,16 @@ class ScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
         combine_gm = torch.fx.GraphModule(dict(tx.output.nn_modules), combine_graph)
         combine_fn_name = tx.output.install_subgraph("scan_combine_fn", combine_gm)
 
-        p_args = (
+        p_args: tuple[Any, ...] = (
             make_attr(tx, combine_fn_name),
             init_proxy,
             xs_proxy,
             additional_inputs_proxy,
         )
+        # ys_buffers is an optional trailing operand group; omit it entirely when the
+        # caller passed no destinations, so existing scan graphs are unchanged.
+        if ys_buffers_vars:
+            p_args += (list(ys_buffers.as_proxy()),)  # type: ignore[union-attr]
         hop_kwargs = (
             {"mutated_arg_indices": mutated_arg_indices} if mutated_arg_indices else {}
         )
