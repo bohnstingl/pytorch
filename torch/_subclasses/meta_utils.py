@@ -1823,7 +1823,7 @@ class MetaConverter(Generic[_TensorT]):
                             is_leaf = t.is_leaf
                             if t.requires_grad and safe_is_leaf(r):
                                 r.requires_grad = True
-                            elif t.requires_grad and not is_leaf:
+                            if t.requires_grad and not is_leaf:
                                 r = self._backward_error(r)
                         elif t.is_functional:
                             if t.unwrapped is None:

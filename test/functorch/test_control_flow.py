@@ -5138,6 +5138,35 @@ class TestControlFlowDevice(_TestControlFlowBase):
         self.assertFalse(torch.func.vjp(chain, x)[0].requires_grad)
 
     @skipCUDAIf(not SM70OrLater, "triton")
+    @parametrize("first,second", [("scan", "scan"), ("map", "cond")])
+    def test_hop_func_grad_chained(self, device, first, second):
+        def body(x):
+            return x.sin() * x
+
+        def scan_body(c, x):
+            c = (c * x).sin()
+            return c, c + x
+
+        init = torch.ones(3, device=device)
+        # Each HOP and the same computation without it
+        hops = {
+            "cond": (lambda x: cond(x.sum() > 0, body, torch.cos, (x,)), body),
+            "map": (lambda x: control_flow.map(body, x), body),
+            "scan": (
+                lambda x: scan(scan_body, init, x)[1],
+                lambda x: _fake_scan(scan_body, init, x)[1],
+            ),
+        }
+        (f, f_exp), (g, g_exp) = hops[first], hops[second]
+        x = torch.rand(5, 3, device=device) + 0.5
+        w = torch.rand(5, 3, device=device)
+        grad = torch.func.grad
+        got = grad(lambda x: (g(f(x)) * w).sum())(x)
+        self.assertEqual(got, grad(lambda x: (g_exp(f_exp(x)) * w).sum())(x))
+        self.assertFalse(torch.func.vjp(lambda x: g(f(x)), x)[0].requires_grad)
+
+    @skipIfTorchDynamo("eager_noexcept wraps the errors raised inside the graph")
+    @skipCUDAIf(not SM70OrLater, "triton")
     def test_cond_func_grad_unsupported_raises(self, device):
         def f(x):
             return cond(x.sum() > 0, lambda x: x.sin() * x, torch.cos, (x,))
